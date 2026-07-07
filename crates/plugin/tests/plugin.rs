@@ -81,3 +81,8 @@ fn plugin_surface_reexports_herdr_client_for_app_builders() {
     let client = Arc::new(HerdrClient::with_binary("/definitely/missing/herdr"));
     let _app = App::with_client(client);
 }
+
+#[test]
+fn plugin_surface_exposes_setup_hook() {
+    let _app = App::new().setup(|_ctx: Context| async { Ok(()) });
+}

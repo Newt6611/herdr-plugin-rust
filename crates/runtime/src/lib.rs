@@ -5,7 +5,7 @@ pub mod env;
 pub mod event_source;
 pub mod events;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{error::Error, future::Future, path::PathBuf, pin::Pin, sync::Arc};
 
 use herdr_client::HerdrClient;
 use herdr_dispatcher::{EventDispatcher, Handler};
@@ -15,6 +15,10 @@ pub use env::{HerdrEnv, PluginInvocationContext};
 use event_source::EnvEventSource;
 use events::Event;
 
+pub type SetupError = Box<dyn Error + Send + Sync + 'static>;
+type SetupFuture = Pin<Box<dyn Future<Output = Result<(), SetupError>> + Send + 'static>>;
+type SetupHandler = Box<dyn Fn(Context) -> SetupFuture + Send + Sync + 'static>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error("invalid HERDR_PLUGIN_EVENT_JSON")]
@@ -23,12 +27,18 @@ pub enum RuntimeError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("setup callback failed")]
+    Setup {
+        #[source]
+        source: SetupError,
+    },
 }
 
 /// Runtime application facade used to register and dispatch typed events.
 pub struct App {
     context: Context,
     dispatcher: EventDispatcher<Context>,
+    setup_handlers: Vec<SetupHandler>,
     herdr_bin_path_override: Option<PathBuf>,
 }
 
@@ -43,6 +53,7 @@ impl App {
         Self {
             context: Context::new(client),
             dispatcher: EventDispatcher::default(),
+            setup_handlers: Vec::new(),
             herdr_bin_path_override: None,
         }
     }
@@ -76,6 +87,20 @@ impl App {
         self
     }
 
+    /// Registers a setup callback that runs before the current event starts dispatching.
+    ///
+    /// Setup callbacks run after Herdr environment parsing, so they receive the
+    /// same populated [`Context`] as event handlers.
+    pub fn setup<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(Context) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), SetupError>> + Send + 'static,
+    {
+        self.setup_handlers
+            .push(Box::new(move |context| Box::pin(handler(context))));
+        self
+    }
+
     /// Runs the app for the current Herdr plugin invocation.
     pub async fn run(mut self) -> Result<(), RuntimeError> {
         let mut output = EnvEventSource::from_env()?;
@@ -84,6 +109,11 @@ impl App {
         }
 
         self.context = Context::with_env(self.context.client_handle(), output.env);
+        for handler in &self.setup_handlers {
+            handler(self.context.clone())
+                .await
+                .map_err(|source| RuntimeError::Setup { source })?;
+        }
         if let Some(event) = output.event {
             event.dispatch(&self.dispatcher, self.context.clone()).await;
         }

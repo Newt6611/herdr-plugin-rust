@@ -1,13 +1,12 @@
-use herdr_plugin::{App, Context, PaneFocused, Plugin, TabCreated, WorkspaceCreated};
+use herdr_plugin::{App, Context, PaneFocused, TabCreated, WorkspaceCreated};
 
-struct SearchPlugin;
+async fn setup(ctx: Context) -> Result<(), herdr_plugin::SetupError> {
+    println!("plugin id: {:?}", ctx.env().plugin_id);
 
-impl Plugin for SearchPlugin {
-    fn build(&self, app: &mut App) {
-        app.on::<TabCreated>(tab_created);
-        app.on::<PaneFocused>(pane_focused);
-        app.on::<WorkspaceCreated>(workspace_created);
-    }
+    let tabs = ctx.client().tab().list(Default::default()).await?;
+    println!("current tab count: {}", tabs.tabs.len());
+
+    Ok(())
 }
 
 async fn tab_created(_ctx: Context, event: TabCreated) {
@@ -24,9 +23,11 @@ async fn workspace_created(_ctx: Context, event: WorkspaceCreated) {
 
 #[tokio::main]
 async fn main() -> Result<(), herdr_plugin::RuntimeError> {
-    let mut app = App::new();
-
-    SearchPlugin.build(&mut app);
-
-    app.run().await
+    App::new()
+        .setup(setup)
+        .on_event::<TabCreated>(tab_created)
+        .on_event::<PaneFocused>(pane_focused)
+        .on_event::<WorkspaceCreated>(workspace_created)
+        .run()
+        .await
 }

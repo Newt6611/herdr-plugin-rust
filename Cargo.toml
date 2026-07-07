@@ -17,7 +17,7 @@ rust-version = "1.75"
 [workspace.dependencies]
 herdr-client = { version = "0.1.0", path = "crates/client" }
 herdr-dispatcher = { version = "0.1.0", path = "crates/dispatcher" }
-herdr-plugin = { version = "0.1.1", path = "crates/plugin" }
+herdr-plugin = { version = "0.1.2", path = "crates/plugin" }
 herdr-runtime = { version = "0.1.0", path = "crates/runtime" }
 serde = "1.0.228"
 serde_json = "1.0.145"

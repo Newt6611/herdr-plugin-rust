@@ -39,22 +39,21 @@ Install the SDK with:
 
 ```toml
 [dependencies]
-herdr-plugin = "0.1.1"
+herdr-plugin = "0.1.2"
 ```
 
 ## Runtime Example
 
 ```rust
-use herdr_plugin::{App, Context, PaneFocused, Plugin, TabCreated, WorkspaceCreated};
+use herdr_plugin::{App, Context, PaneFocused, TabCreated, WorkspaceCreated};
 
-struct SearchPlugin;
+async fn setup(ctx: Context) -> Result<(), herdr_plugin::SetupError> {
+    println!("plugin id: {:?}", ctx.env().plugin_id);
 
-impl Plugin for SearchPlugin {
-    fn build(&self, app: &mut App) {
-        app.on::<TabCreated>(tab_created);
-        app.on::<PaneFocused>(pane_focused);
-        app.on::<WorkspaceCreated>(workspace_created);
-    }
+    let tabs = ctx.client().tab().list(Default::default()).await?;
+    println!("current tab count: {}", tabs.tabs.len());
+
+    Ok(())
 }
 
 async fn tab_created(ctx: Context, event: TabCreated) {
@@ -74,18 +73,28 @@ async fn workspace_created(_ctx: Context, event: WorkspaceCreated) {
 
 #[tokio::main]
 async fn main() -> Result<(), herdr_plugin::RuntimeError> {
-    let mut app = App::new();
-
-    SearchPlugin.build(&mut app);
-
-    app.run().await
+    App::new()
+        .setup(setup)
+        .on_event::<TabCreated>(tab_created)
+        .on_event::<PaneFocused>(pane_focused)
+        .on_event::<WorkspaceCreated>(workspace_created)
+        .run()
+        .await
 }
 ```
 
-Builder-style registration is also supported:
+Plugin-style registration is also supported:
 
 ```rust
-use herdr_plugin::{App, Context, TabRenamed};
+use herdr_plugin::{App, Context, Plugin, TabRenamed};
+
+struct SearchPlugin;
+
+impl Plugin for SearchPlugin {
+    fn build(&self, app: &mut App) {
+        app.on::<TabRenamed>(tab_renamed);
+    }
+}
 
 async fn tab_renamed(_ctx: Context, event: TabRenamed) {
     println!("renamed to {}", event.label);
@@ -93,11 +102,31 @@ async fn tab_renamed(_ctx: Context, event: TabRenamed) {
 
 #[tokio::main]
 async fn main() -> Result<(), herdr_plugin::RuntimeError> {
-    App::new()
-        .on_event::<TabRenamed>(tab_renamed)
-        .run()
-        .await
+    let mut app = App::new();
+    SearchPlugin.build(&mut app);
+    app.run().await
 }
+```
+
+## Setup Hooks
+
+Use `App::setup(...)` when your plugin needs to load state, inspect the Herdr
+runtime environment, or fetch data before handling the current event.
+
+Setup callbacks receive the same `Context` as event handlers. They run after
+`App::run()` reads Herdr environment variables and before the current event
+starts dispatching.
+
+```rust
+use herdr_plugin::{App, Context};
+
+async fn setup(ctx: Context) -> Result<(), herdr_plugin::SetupError> {
+    let workspaces = ctx.client().workspace().list().await?;
+    println!("workspaces: {}", workspaces.workspaces.len());
+    Ok(())
+}
+
+let app = App::new().setup(setup);
 ```
 
 ## Context

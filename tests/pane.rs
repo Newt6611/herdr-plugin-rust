@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use herdr_client::{
+use herdr_plugin::{
     Direction, HerdrClient, HerdrError, PaneListOptions, PaneMoveDestination, PaneMoveOptions,
     PaneSelector, PaneSplitOptions,
 };
@@ -159,7 +159,7 @@ esac"#,
         .pane()
         .zoom(
             PaneSelector::Pane("wT:p1".to_owned()),
-            herdr_client::PaneZoomMode::Toggle,
+            herdr_plugin::PaneZoomMode::Toggle,
         )
         .await
         .unwrap();

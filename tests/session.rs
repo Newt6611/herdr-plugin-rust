@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use herdr_client::{HerdrClient, HerdrError};
+use herdr_plugin::{HerdrClient, HerdrError};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -17,7 +17,7 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn fake_herdr(script: &str) -> PathBuf {
     let id = NEXT_FAKE_ID.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("herdr-client-test-{}-{id}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("herdr-plugin-test-{}-{id}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
 
     let path = dir.join("herdr");

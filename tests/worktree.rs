@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use herdr_client::{
+use herdr_plugin::{
     HerdrClient, HerdrError, WorktreeCreateOptions, WorktreeListOptions, WorktreeOpenOptions,
     WorktreeOpenTarget, WorktreeSource,
 };

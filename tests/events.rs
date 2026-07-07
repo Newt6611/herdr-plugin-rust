@@ -1,4 +1,4 @@
-use herdr_runtime::{
+use herdr_plugin::{
     events::{
         AgentStatus, EventData, EventEnvelope, EventKind, PaneAgentStatusChanged, PaneInfo,
         TabInfo, TabRenamed, WorkspaceInfo,

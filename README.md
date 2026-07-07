@@ -26,11 +26,8 @@ The published crate is `herdr-plugin`.
 ## Workspace
 
 ```text
-crates/
-  plugin/      published SDK crate
-  dispatcher/  unpublished reference/internal crate
-  runtime/     unpublished reference/internal crate
-  client/      unpublished reference/internal crate
+src/           published SDK crate
+tests/         SDK integration tests
 examples/
   minimal/     minimal plugin runtime example
 ```
@@ -51,12 +48,15 @@ struct PluginState {
     label_prefix: String,
 }
 
-async fn setup(ctx: Context<PluginState>) -> Result<(), herdr_plugin::SetupError> {
-    println!("plugin id: {:?}", ctx.env().plugin_id);
-    println!("label prefix: {}", ctx.state().label_prefix);
+async fn setup(ctx: Context<PluginState>) -> herdr_plugin::SetupResult {
+    ctx.log().info(format!("plugin id: {:?}", ctx.env().plugin_id));
+    ctx.log()
+        .info(format!("label prefix: {}", ctx.state().label_prefix));
+    ctx.log()
+        .info(format!("config path: {:?}", ctx.config_path("config.toml")));
 
     let tabs = ctx.client().tab().list(Default::default()).await?;
-    println!("current tab count: {}", tabs.tabs.len());
+    ctx.log().info(format!("current tab count: {}", tabs.tabs.len()));
 
     Ok(())
 }
@@ -86,6 +86,13 @@ async fn main() -> Result<(), herdr_plugin::RuntimeError> {
         .on_event::<TabCreated>(tab_created)
         .on_event::<PaneFocused>(pane_focused)
         .on_event::<WorkspaceCreated>(workspace_created)
+        .teardown(|ctx: Context<PluginState>| async move {
+            ctx.log().info("plugin invocation finished");
+            Ok(())
+        })
+        .on_error(|ctx: Context<PluginState>, error| async move {
+            ctx.log().error(error);
+        })
         .run()
         .await
 }
@@ -128,7 +135,7 @@ starts dispatching.
 ```rust
 use herdr_plugin::{App, Context};
 
-async fn setup(ctx: Context) -> Result<(), herdr_plugin::SetupError> {
+async fn setup(ctx: Context) -> herdr_plugin::SetupResult {
     let workspaces = ctx.client().workspace().list().await?;
     println!("workspaces: {}", workspaces.workspaces.len());
     Ok(())
@@ -163,6 +170,55 @@ let app = App::new()
 
 State is immutable from the framework's point of view. If a plugin needs shared
 mutable state, put a `Mutex`, `RwLock`, or atomic value inside the state struct.
+
+## Lifecycle Hooks
+
+`setup` runs after Herdr environment parsing and before the current event starts
+dispatching. `teardown` runs after event dispatch completes. `on_error` runs
+before `run()` returns a runtime error.
+
+```rust
+use herdr_plugin::{App, Context};
+
+let app = App::new()
+    .setup(|ctx: Context| async move {
+        ctx.log().info("starting");
+        Ok(())
+    })
+    .teardown(|ctx: Context| async move {
+        ctx.log().info("finished");
+        Ok(())
+    })
+    .on_error(|ctx: Context, error| async move {
+        ctx.log().error(error);
+    });
+```
+
+## Logger
+
+Use `ctx.log()` for simple runtime logging. The current implementation writes to
+stderr; the API is intentionally small so it can later route through Herdr's
+socket/logging system.
+
+```rust
+ctx.log().info("refresh started");
+ctx.log().warn("refresh skipped");
+ctx.log().error("refresh failed");
+```
+
+## Runtime Helpers
+
+`Context` exposes small helpers for common Herdr runtime questions and paths:
+
+```rust
+ctx.is_event();
+ctx.is_action();
+ctx.event_kind();
+ctx.config_dir();
+ctx.state_dir();
+ctx.config_path("config.toml");
+ctx.state_path("cache.json");
+```
 
 ## Context
 

@@ -1,6 +1,9 @@
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use crate::{env::HerdrEnv, HerdrClient};
+use crate::{env::HerdrEnv, events::EventKind, logger::Logger, HerdrClient};
 
 /// Shared context passed to every plugin event handler.
 pub struct Context<State = ()> {
@@ -44,6 +47,42 @@ impl<State> Context<State> {
 
     pub fn state(&self) -> &State {
         &self.services.state
+    }
+
+    pub fn log(&self) -> Logger<'_> {
+        Logger::new(self.env())
+    }
+
+    pub fn is_event(&self) -> bool {
+        self.services.env.plugin_event_json.is_some()
+    }
+
+    pub fn is_action(&self) -> bool {
+        self.services.env.plugin_action_id.is_some()
+    }
+
+    pub fn event_kind(&self) -> Option<EventKind> {
+        self.services
+            .env
+            .plugin_event_json
+            .as_ref()
+            .map(|event| event.event)
+    }
+
+    pub fn config_dir(&self) -> Option<&Path> {
+        self.services.env.plugin_config_dir.as_deref()
+    }
+
+    pub fn state_dir(&self) -> Option<&Path> {
+        self.services.env.plugin_state_dir.as_deref()
+    }
+
+    pub fn config_path(&self, path: impl AsRef<Path>) -> Option<PathBuf> {
+        self.config_dir().map(|dir| dir.join(path))
+    }
+
+    pub fn state_path(&self, path: impl AsRef<Path>) -> Option<PathBuf> {
+        self.state_dir().map(|dir| dir.join(path))
     }
 
     pub(crate) fn client_handle(&self) -> Arc<HerdrClient> {

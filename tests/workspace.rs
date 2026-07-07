@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use herdr_client::{HerdrClient, HerdrError, WorkspaceCreateOptions};
+use herdr_plugin::{HerdrClient, HerdrError, WorkspaceCreateOptions};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

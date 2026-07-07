@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use herdr_dispatcher::EventDispatcher;
+use herdr_plugin::dispatcher::EventDispatcher;
 use tokio::sync::Mutex;
 
 #[derive(Clone, Debug)]

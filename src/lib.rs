@@ -7,6 +7,7 @@ pub mod env;
 mod error;
 pub mod event_source;
 pub mod events;
+pub mod logger;
 mod models;
 mod pane;
 mod session;
@@ -26,9 +27,11 @@ pub use client::{CommandLine, HerdrClient};
 pub use context::Context;
 pub use dispatcher::{EventDispatcher, Handler};
 pub use env::{HerdrEnv, PluginInvocationContext};
+pub use error::{HerdrCommandError, HerdrError};
 use event_source::EnvEventSource;
 pub use event_source::{EventSourceOutput, RuntimeEvent};
 pub use events::*;
+pub use logger::Logger;
 pub use models::{
     AgentInfoResponse, AgentList, AgentReadResponse, DeleteSessionResponse, Pane,
     PaneActionResponse, PaneCloseResponse, PaneCurrentResponse, PaneEdgesResponse,
@@ -53,8 +56,13 @@ pub use worktree::{
 };
 
 pub type SetupError = Box<dyn Error + Send + Sync + 'static>;
+pub type SetupResult<T = ()> = Result<T, SetupError>;
+pub type RuntimeResult<T = ()> = Result<T, RuntimeError>;
 type SetupFuture = Pin<Box<dyn Future<Output = Result<(), SetupError>> + Send + 'static>>;
 type SetupHandler<State> = Box<dyn Fn(Context<State>) -> SetupFuture + Send + Sync + 'static>;
+type ErrorFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+type ErrorHandler<State> =
+    Box<dyn Fn(Context<State>, String) -> ErrorFuture + Send + Sync + 'static>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -69,6 +77,11 @@ pub enum RuntimeError {
         #[source]
         source: SetupError,
     },
+    #[error("teardown callback failed")]
+    Teardown {
+        #[source]
+        source: SetupError,
+    },
 }
 
 /// Runtime application facade used to register and dispatch typed events.
@@ -76,6 +89,8 @@ pub struct App<State = ()> {
     context: Context<State>,
     dispatcher: EventDispatcher<Context<State>>,
     setup_handlers: Vec<SetupHandler<State>>,
+    teardown_handlers: Vec<SetupHandler<State>>,
+    error_handlers: Vec<ErrorHandler<State>>,
     herdr_bin_path_override: Option<PathBuf>,
 }
 
@@ -91,6 +106,8 @@ impl App<()> {
             context: Context::new(client),
             dispatcher: EventDispatcher::default(),
             setup_handlers: Vec::new(),
+            teardown_handlers: Vec::new(),
+            error_handlers: Vec::new(),
             herdr_bin_path_override: None,
         }
     }
@@ -123,6 +140,8 @@ where
             ),
             dispatcher: EventDispatcher::default(),
             setup_handlers: Vec::new(),
+            teardown_handlers: Vec::new(),
+            error_handlers: Vec::new(),
             herdr_bin_path_override: self.herdr_bin_path_override,
         }
     }
@@ -170,9 +189,35 @@ where
         self
     }
 
+    /// Registers a teardown callback that runs after event dispatch completes.
+    pub fn teardown<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(Context<State>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<(), SetupError>> + Send + 'static,
+    {
+        self.teardown_handlers
+            .push(Box::new(move |context| Box::pin(handler(context))));
+        self
+    }
+
+    /// Registers a callback that runs before `run` returns a runtime error.
+    pub fn on_error<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(Context<State>, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.error_handlers.push(Box::new(move |context, error| {
+            Box::pin(handler(context, error))
+        }));
+        self
+    }
+
     /// Runs the app for the current Herdr plugin invocation.
     pub async fn run(mut self) -> Result<(), RuntimeError> {
-        let mut output = EnvEventSource::from_env()?;
+        let mut output = match EnvEventSource::from_env() {
+            Ok(output) => output,
+            Err(error) => return self.return_error(error).await,
+        };
         if let Some(path) = self.herdr_bin_path_override.as_ref() {
             output.env.bin_path = Some(path.clone());
         }
@@ -183,14 +228,27 @@ where
             self.context.state_handle(),
         );
         for handler in &self.setup_handlers {
-            handler(self.context.clone())
-                .await
-                .map_err(|source| RuntimeError::Setup { source })?;
+            if let Err(source) = handler(self.context.clone()).await {
+                return self.return_error(RuntimeError::Setup { source }).await;
+            }
         }
         if let Some(event) = output.event {
             event.dispatch(&self.dispatcher, self.context.clone()).await;
         }
+        for handler in &self.teardown_handlers {
+            if let Err(source) = handler(self.context.clone()).await {
+                return self.return_error(RuntimeError::Teardown { source }).await;
+            }
+        }
         Ok(())
+    }
+
+    async fn return_error(self, error: RuntimeError) -> Result<(), RuntimeError> {
+        let message = error.to_string();
+        for handler in &self.error_handlers {
+            handler(self.context.clone(), message.clone()).await;
+        }
+        Err(error)
     }
 }
 

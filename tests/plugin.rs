@@ -101,3 +101,19 @@ fn plugin_surface_exposes_typed_app_state() {
             Ok(())
         });
 }
+
+#[test]
+fn plugin_surface_exposes_context_helpers_and_lifecycle_hooks() {
+    let _app = App::new()
+        .setup(|ctx: Context| async move {
+            ctx.log().info("setup");
+            let _ = ctx.config_path("config.toml");
+            let _ = ctx.state_path("state.json");
+            let _ = ctx.event_kind();
+            Ok(())
+        })
+        .teardown(|_ctx: Context| async { Ok(()) })
+        .on_error(|ctx: Context, error: String| async move {
+            ctx.log().error(error);
+        });
+}

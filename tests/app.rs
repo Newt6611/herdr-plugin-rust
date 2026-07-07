@@ -8,8 +8,8 @@ use std::{
     },
 };
 
-use herdr_client::HerdrClient;
-use herdr_runtime::{
+use herdr_plugin::HerdrClient;
+use herdr_plugin::{
     event_source::{EnvEventSource, RuntimeEvent},
     events::{Event, EventKind, TabRenamed},
     App, Context, PluginInvocationContext, RuntimeError,
@@ -48,7 +48,7 @@ struct EnvGuard {
 
 fn fake_herdr(script: &str) -> PathBuf {
     let id = NEXT_FAKE_ID.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("herdr-runtime-test-{}-{id}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("herdr-plugin-test-{}-{id}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
 
     let path = dir.join("herdr");
@@ -302,6 +302,121 @@ async fn app_state_is_available_to_setup_and_event_handlers() {
     app.run().await.unwrap();
 
     assert_eq!(*calls.lock().await, ["setup:state", "event:state:Renamed"]);
+}
+
+#[tokio::test]
+async fn context_exposes_invocation_helpers_paths_and_logger() {
+    let _env = EnvGuard::set(&[
+        ("HERDR_PLUGIN_CONFIG_DIR", "/tmp/herdr-config"),
+        ("HERDR_PLUGIN_STATE_DIR", "/tmp/herdr-state"),
+        ("HERDR_PLUGIN_ACTION_ID", "refresh"),
+        (
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{
+              "event":"tab_renamed",
+              "data":{
+                "type":"tab_renamed",
+                "tab_id":"w1:t1",
+                "workspace_id":"w1",
+                "label":"Renamed"
+              }
+            }"#,
+        ),
+    ]);
+    let captured = Arc::new(Mutex::new(None));
+    let app = App::new().setup({
+        let captured = captured.clone();
+        move |ctx: Context| {
+            let captured = captured.clone();
+            async move {
+                ctx.log().info("setup");
+                assert!(ctx.is_event());
+                assert!(ctx.is_action());
+                assert_eq!(ctx.event_kind(), Some(EventKind::TabRenamed));
+                assert_eq!(
+                    ctx.config_path("config.toml").as_deref(),
+                    Some(Path::new("/tmp/herdr-config/config.toml"))
+                );
+                assert_eq!(
+                    ctx.state_path("state.json").as_deref(),
+                    Some(Path::new("/tmp/herdr-state/state.json"))
+                );
+                *captured.lock().await = Some(ctx);
+                Ok(())
+            }
+        }
+    });
+
+    app.run().await.unwrap();
+
+    assert!(captured.lock().await.is_some());
+}
+
+#[tokio::test]
+async fn teardown_runs_after_event_dispatch() {
+    let _env = EnvGuard::set(&[(
+        "HERDR_PLUGIN_EVENT_JSON",
+        r#"{
+          "event":"tab_renamed",
+          "data":{
+            "type":"tab_renamed",
+            "tab_id":"w1:t1",
+            "workspace_id":"w1",
+            "label":"Renamed"
+          }
+        }"#,
+    )]);
+    let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+    let app = App::new()
+        .on_event::<TabRenamed>({
+            let calls = calls.clone();
+            move |_ctx: Context, event: TabRenamed| {
+                let calls = calls.clone();
+                async move {
+                    calls.lock().await.push(format!("event:{}", event.label));
+                }
+            }
+        })
+        .teardown({
+            let calls = calls.clone();
+            move |_ctx: Context| {
+                let calls = calls.clone();
+                async move {
+                    calls.lock().await.push("teardown".to_string());
+                    Ok(())
+                }
+            }
+        });
+
+    app.run().await.unwrap();
+
+    assert_eq!(*calls.lock().await, ["event:Renamed", "teardown"]);
+}
+
+#[tokio::test]
+async fn on_error_runs_when_setup_fails() {
+    let _env = EnvGuard::set(&[]);
+    let errors = Arc::new(Mutex::new(Vec::<String>::new()));
+    let app = App::new()
+        .setup(|_ctx: Context| async {
+            Err::<(), herdr_plugin::SetupError>(
+                std::io::Error::new(std::io::ErrorKind::Other, "setup failed").into(),
+            )
+        })
+        .on_error({
+            let errors = errors.clone();
+            move |_ctx: Context, error: String| {
+                let errors = errors.clone();
+                async move {
+                    errors.lock().await.push(error);
+                }
+            }
+        });
+
+    let error = app.run().await.unwrap_err();
+
+    assert!(matches!(error, RuntimeError::Setup { .. }));
+    assert_eq!(*errors.lock().await, ["setup callback failed"]);
 }
 
 #[tokio::test]

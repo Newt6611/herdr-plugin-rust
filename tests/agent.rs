@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use herdr_client::{
+use herdr_plugin::{
     AgentExplainOptions, AgentReadOptions, AgentReadSource, AgentStartOptions, AgentWaitStatus,
     Direction, HerdrClient,
 };
@@ -81,7 +81,7 @@ esac"#,
                 AgentReadOptions {
                     source: Some(AgentReadSource::Recent),
                     lines: Some(2),
-                    format: Some(herdr_client::ReadFormat::Text),
+                    format: Some(herdr_plugin::ReadFormat::Text),
                     ansi: false,
                 },
             )

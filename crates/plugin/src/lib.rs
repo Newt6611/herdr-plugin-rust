@@ -4,6 +4,8 @@ pub use herdr_client::HerdrClient;
 pub use herdr_dispatcher::{EventDispatcher, Handler};
 pub use herdr_runtime::env;
 pub use herdr_runtime::env::*;
+pub use herdr_runtime::event_source;
+pub use herdr_runtime::event_source::*;
 pub use herdr_runtime::events;
 pub use herdr_runtime::events::*;
 pub use herdr_runtime::{App, Context, RuntimeError};

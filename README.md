@@ -53,7 +53,7 @@ impl Plugin for SearchPlugin {
 async fn tab_created(ctx: Context, event: TabCreated) {
     println!("tab created: {}", event.tab.tab_id);
 
-    let tabs = ctx.client.tab().list(Default::default()).await;
+    let tabs = ctx.client().tab().list(Default::default()).await;
     println!("tabs: {tabs:?}");
 }
 
@@ -99,14 +99,13 @@ Every event handler receives a `Context`:
 
 ```rust
 pub struct Context {
-    pub client: std::sync::Arc<HerdrClient>,
-    pub env: HerdrEnv,
+    // fields are private
 }
 ```
 
-`ctx.client` is a shared typed client for calling Herdr commands.
+`ctx.client()` returns the shared typed client for calling Herdr commands.
 
-`ctx.env` contains Herdr-provided runtime values such as:
+`ctx.env()` returns Herdr-provided runtime values such as:
 
 - `HERDR_SOCKET_PATH`
 - `HERDR_BIN_PATH`
@@ -120,9 +119,10 @@ pub struct Context {
 - `HERDR_PLUGIN_CONTEXT_JSON`
 - `HERDR_PLUGIN_EVENT_JSON`
 
-`App::run()` reads the current Herdr environment, parses
-`HERDR_PLUGIN_EVENT_JSON`, converts it into the matching typed event payload, and
-dispatches it to registered handlers.
+`App::run()` reads from an internal environment event source, converts
+`HERDR_PLUGIN_EVENT_JSON` into the matching typed event payload, and dispatches
+it to registered handlers. This keeps event parsing separate from the runtime
+dispatcher so socket, replay, and testing sources can be added later.
 
 ## Client Example
 
@@ -162,8 +162,8 @@ let app = App::new().with_herdr_bin_path("/path/to/herdr");
 ## Design Notes
 
 - `herdr-dispatcher` is generic and reusable.
-- `herdr-runtime` is Herdr-aware and owns `App`, `Context`, env parsing, and
-  typed Herdr event dispatch.
+- `herdr-runtime` is Herdr-aware and owns `App`, opaque `Context` services,
+  event sources, and typed Herdr event dispatch.
 - `herdr-client` currently shells out to the local `herdr` binary with
   `tokio::process::Command`.
 - Socket transport support is planned, but not implemented yet.

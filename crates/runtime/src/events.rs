@@ -60,6 +60,8 @@ pub trait HerdrEvent {
     }
 }
 
+pub trait Event: Clone + Send + Sync + 'static {}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventEnvelope {
     pub event: EventKind,
@@ -262,6 +264,8 @@ macro_rules! event_struct {
         impl HerdrEvent for $name {
             const KIND: EventKind = EventKind::$kind;
         }
+
+        impl Event for $name {}
     };
 }
 

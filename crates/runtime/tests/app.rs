@@ -10,7 +10,8 @@ use std::{
 
 use herdr_client::HerdrClient;
 use herdr_runtime::{
-    events::{EventKind, TabRenamed},
+    event_source::{EnvEventSource, RuntimeEvent},
+    events::{Event, EventKind, TabRenamed},
     App, Context, PluginInvocationContext, RuntimeError,
 };
 use tokio::sync::Mutex;
@@ -152,7 +153,7 @@ async fn app_with_client_shares_arc_client_with_handlers() {
             let client = client.clone();
             let seen_same_client = seen_same_client.clone();
             async move {
-                *seen_same_client.lock().await = Arc::ptr_eq(&ctx.client, &client);
+                *seen_same_client.lock().await = std::ptr::eq(ctx.client(), client.as_ref());
             }
         }
     });
@@ -190,7 +191,7 @@ exit 99"#,
             move |ctx: Context, _event: TabRenamed| {
                 let seen_session_count = seen_session_count.clone();
                 async move {
-                    let sessions = ctx.client.session().list().await.unwrap();
+                    let sessions = ctx.client().session().list().await.unwrap();
                     *seen_session_count.lock().await = Some(sessions.sessions.len());
                 }
             }
@@ -262,39 +263,39 @@ async fn app_new_reads_herdr_runtime_environment_into_context() {
     app.run().await.unwrap();
 
     let ctx = captured.lock().await.clone().unwrap();
-    assert!(ctx.env.is_herdr);
+    assert!(ctx.env().is_herdr);
     assert_eq!(
-        ctx.env.socket_path.as_deref(),
+        ctx.env().socket_path.as_deref(),
         Some(Path::new("/tmp/herdr.sock"))
     );
     assert_eq!(
-        ctx.env.bin_path.as_deref(),
+        ctx.env().bin_path.as_deref(),
         Some(Path::new("/opt/herdr/bin/herdr"))
     );
-    assert_eq!(ctx.env.plugin_id.as_deref(), Some("sample-plugin"));
+    assert_eq!(ctx.env().plugin_id.as_deref(), Some("sample-plugin"));
     assert_eq!(
-        ctx.env.plugin_root.as_deref(),
+        ctx.env().plugin_root.as_deref(),
         Some(Path::new("/plugins/sample"))
     );
     assert_eq!(
-        ctx.env.plugin_config_dir.as_deref(),
+        ctx.env().plugin_config_dir.as_deref(),
         Some(Path::new("/config/sample"))
     );
     assert_eq!(
-        ctx.env.plugin_state_dir.as_deref(),
+        ctx.env().plugin_state_dir.as_deref(),
         Some(Path::new("/state/sample"))
     );
-    assert_eq!(ctx.env.workspace_id.as_deref(), Some("w1"));
-    assert_eq!(ctx.env.tab_id.as_deref(), Some("w1:t1"));
-    assert_eq!(ctx.env.pane_id.as_deref(), Some("w1:p1"));
-    assert_eq!(ctx.env.plugin_action_id.as_deref(), Some("action-1"));
-    assert_eq!(ctx.env.plugin_event.as_deref(), Some("tab.renamed"));
+    assert_eq!(ctx.env().workspace_id.as_deref(), Some("w1"));
+    assert_eq!(ctx.env().tab_id.as_deref(), Some("w1:t1"));
+    assert_eq!(ctx.env().pane_id.as_deref(), Some("w1:p1"));
+    assert_eq!(ctx.env().plugin_action_id.as_deref(), Some("action-1"));
+    assert_eq!(ctx.env().plugin_event.as_deref(), Some("tab.renamed"));
     assert_eq!(
-        ctx.env.plugin_entrypoint_id.as_deref(),
+        ctx.env().plugin_entrypoint_id.as_deref(),
         Some("pane-command")
     );
 
-    let plugin_context: PluginInvocationContext = ctx.env.plugin_context.unwrap();
+    let plugin_context: PluginInvocationContext = ctx.env().plugin_context.clone().unwrap();
     assert_eq!(plugin_context.workspace_id.as_deref(), Some("w1"));
     assert_eq!(plugin_context.focused_pane_agent.as_deref(), Some("codex"));
     assert_eq!(plugin_context.selected_text.as_deref(), Some("hello"));
@@ -303,7 +304,7 @@ async fn app_new_reads_herdr_runtime_environment_into_context() {
         Some("https://example.com")
     );
 
-    let event = ctx.env.plugin_event_json.unwrap();
+    let event = ctx.env().plugin_event_json.clone().unwrap();
     assert_eq!(event.event, EventKind::TabRenamed);
 }
 
@@ -313,4 +314,35 @@ async fn run_returns_typed_error_for_invalid_event_json() {
     let error = App::new().run().await.unwrap_err();
 
     assert!(matches!(error, RuntimeError::InvalidEventJson { .. }));
+}
+
+#[test]
+fn env_event_source_reads_typed_runtime_event_from_env() {
+    let _env = EnvGuard::set(&[(
+        "HERDR_PLUGIN_EVENT_JSON",
+        r#"{
+          "event":"tab_renamed",
+          "data":{
+            "type":"tab_renamed",
+            "tab_id":"w1:t1",
+            "workspace_id":"w1",
+            "label":"Renamed"
+          }
+        }"#,
+    )]);
+
+    let output = EnvEventSource::from_env().unwrap();
+
+    assert!(matches!(
+        output.event,
+        Some(RuntimeEvent::TabRenamed(TabRenamed { label, .. })) if label == "Renamed"
+    ));
+    assert!(output.env.plugin_event_json.is_some());
+}
+
+#[test]
+fn typed_herdr_events_implement_runtime_event_trait() {
+    fn assert_event<E: Event>() {}
+
+    assert_event::<TabRenamed>();
 }

@@ -34,6 +34,11 @@ where
         Self::default()
     }
 
+    /// Returns true when no event handlers are registered.
+    pub fn is_empty(&self) -> bool {
+        self.handlers.is_empty()
+    }
+
     /// Registers an async handler for a concrete event type.
     pub fn on<E>(&mut self, handler: impl Handler<C, E>) -> &mut Self
     where

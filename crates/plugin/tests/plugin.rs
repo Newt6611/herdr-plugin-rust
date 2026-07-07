@@ -86,3 +86,18 @@ fn plugin_surface_reexports_herdr_client_for_app_builders() {
 fn plugin_surface_exposes_setup_hook() {
     let _app = App::new().setup(|_ctx: Context| async { Ok(()) });
 }
+
+#[test]
+fn plugin_surface_exposes_typed_app_state() {
+    #[derive(Debug)]
+    struct State {
+        value: usize,
+    }
+
+    let _app = App::new()
+        .with_state(State { value: 7 })
+        .setup(|ctx: Context<State>| async move {
+            assert_eq!(ctx.state().value, 7);
+            Ok(())
+        });
+}

@@ -3,26 +3,33 @@ use std::sync::Arc;
 use crate::{env::HerdrEnv, HerdrClient};
 
 /// Shared context passed to every plugin event handler.
-#[derive(Clone)]
-pub struct Context {
-    services: Arc<RuntimeServices>,
+pub struct Context<State = ()> {
+    services: Arc<RuntimeServices<State>>,
 }
 
-struct RuntimeServices {
+struct RuntimeServices<State> {
     client: Arc<HerdrClient>,
     env: Arc<HerdrEnv>,
+    state: Arc<State>,
 }
 
-impl Context {
+impl Context<()> {
     pub fn new(client: impl Into<Arc<HerdrClient>>) -> Self {
-        Self::with_env(client, HerdrEnv::from_env())
+        Self::with_env_and_state(client, HerdrEnv::from_env(), Arc::new(()))
     }
+}
 
-    pub(crate) fn with_env(client: impl Into<Arc<HerdrClient>>, env: HerdrEnv) -> Self {
+impl<State> Context<State> {
+    pub(crate) fn with_env_and_state(
+        client: impl Into<Arc<HerdrClient>>,
+        env: HerdrEnv,
+        state: Arc<State>,
+    ) -> Self {
         Self {
             services: Arc::new(RuntimeServices {
                 client: client.into(),
                 env: Arc::new(env),
+                state,
             }),
         }
     }
@@ -35,12 +42,28 @@ impl Context {
         &self.services.env
     }
 
+    pub fn state(&self) -> &State {
+        &self.services.state
+    }
+
     pub(crate) fn client_handle(&self) -> Arc<HerdrClient> {
         self.services.client.clone()
     }
+
+    pub(crate) fn state_handle(&self) -> Arc<State> {
+        self.services.state.clone()
+    }
 }
 
-impl Default for Context {
+impl<State> Clone for Context<State> {
+    fn clone(&self) -> Self {
+        Self {
+            services: self.services.clone(),
+        }
+    }
+}
+
+impl Default for Context<()> {
     fn default() -> Self {
         Self::new(HerdrClient::new())
     }

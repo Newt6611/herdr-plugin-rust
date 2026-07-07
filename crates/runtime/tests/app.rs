@@ -249,6 +249,62 @@ async fn setup_runs_with_context_before_event_dispatch() {
 }
 
 #[tokio::test]
+async fn app_state_is_available_to_setup_and_event_handlers() {
+    #[derive(Debug)]
+    struct State {
+        prefix: String,
+    }
+
+    let _env = EnvGuard::set(&[(
+        "HERDR_PLUGIN_EVENT_JSON",
+        r#"{
+          "event":"tab_renamed",
+          "data":{
+            "type":"tab_renamed",
+            "tab_id":"w1:t1",
+            "workspace_id":"w1",
+            "label":"Renamed"
+          }
+        }"#,
+    )]);
+    let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+    let app = App::new()
+        .with_state(State {
+            prefix: "state".to_string(),
+        })
+        .setup({
+            let calls = calls.clone();
+            move |ctx: Context<State>| {
+                let calls = calls.clone();
+                async move {
+                    calls
+                        .lock()
+                        .await
+                        .push(format!("setup:{}", ctx.state().prefix));
+                    Ok(())
+                }
+            }
+        })
+        .on_event::<TabRenamed>({
+            let calls = calls.clone();
+            move |ctx: Context<State>, event: TabRenamed| {
+                let calls = calls.clone();
+                async move {
+                    calls.lock().await.push(format!(
+                        "event:{}:{}",
+                        ctx.state().prefix,
+                        event.label
+                    ));
+                }
+            }
+        });
+
+    app.run().await.unwrap();
+
+    assert_eq!(*calls.lock().await, ["setup:state", "event:state:Renamed"]);
+}
+
+#[tokio::test]
 async fn app_new_reads_herdr_runtime_environment_into_context() {
     let _env = EnvGuard::set(&[
         ("HERDR_SOCKET_PATH", "/tmp/herdr.sock"),

@@ -60,7 +60,13 @@ pub enum RuntimeEvent {
 }
 
 impl RuntimeEvent {
-    pub(crate) async fn dispatch(self, dispatcher: &EventDispatcher<Context>, context: Context) {
+    pub(crate) async fn dispatch<State>(
+        self,
+        dispatcher: &EventDispatcher<Context<State>>,
+        context: Context<State>,
+    ) where
+        State: Send + Sync + 'static,
+    {
         match self {
             Self::WorkspaceCreated(event) => dispatcher.dispatch(context, event).await,
             Self::WorkspaceUpdated(event) => dispatcher.dispatch(context, event).await,

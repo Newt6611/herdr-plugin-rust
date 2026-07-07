@@ -11,14 +11,14 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/herdr/herdr-plugin-rs"
+repository = "https://github.com/Newt6611/herdr-plugin-rust"
 rust-version = "1.75"
 
 [workspace.dependencies]
-herdr-client = { path = "crates/client" }
-herdr-dispatcher = { path = "crates/dispatcher" }
-herdr-plugin = { path = "crates/plugin" }
-herdr-runtime = { path = "crates/runtime" }
+herdr-client = { version = "0.1.0", path = "crates/client" }
+herdr-dispatcher = { version = "0.1.0", path = "crates/dispatcher" }
+herdr-plugin = { version = "0.1.0", path = "crates/plugin" }
+herdr-runtime = { version = "0.1.0", path = "crates/runtime" }
 serde = "1.0.228"
 serde_json = "1.0.145"
 thiserror = "2.0.17"

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Client primitives for Herdr CLI and socket integration."
+publish = false
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }

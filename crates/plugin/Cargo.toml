@@ -1,6 +1,6 @@
 [package]
 name = "herdr-plugin"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -8,9 +8,10 @@ rust-version.workspace = true
 description = "Ergonomic Rust SDK surface for Herdr plugins."
 
 [dependencies]
-herdr-client.workspace = true
-herdr-dispatcher.workspace = true
-herdr-runtime.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 tokio.workspace = true

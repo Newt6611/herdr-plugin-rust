@@ -3,8 +3,8 @@
 Rust SDK and runtime building blocks for Herdr plugins.
 
 `herdr-plugin-rs` does not replace Herdr's plugin system. It provides a typed,
-ergonomic Rust layer on top of Herdr's existing manifest, CLI, socket, and
-environment contracts.
+ergonomic Rust layer on top of Herdr's existing manifest, CLI, and environment
+contracts.
 
 ## Repository Description
 
@@ -21,18 +21,25 @@ This project is early and intentionally incremental. The current focus is:
 - resource clients for sessions, workspaces, worktrees, tabs, panes, and agents
 - socket transport support planned
 
-The dispatcher crate remains generic and does not know about Herdr.
+The published crate is `herdr-plugin`.
 
 ## Workspace
 
 ```text
 crates/
-  dispatcher/  generic async event dispatcher
-  runtime/     Herdr runtime app, context, env, and typed events
-  client/      typed async client over the local herdr CLI
-  plugin/      primary SDK surface and re-exports
+  plugin/      published SDK crate
+  dispatcher/  unpublished reference/internal crate
+  runtime/     unpublished reference/internal crate
+  client/      unpublished reference/internal crate
 examples/
   minimal/     minimal plugin runtime example
+```
+
+Install the SDK with:
+
+```toml
+[dependencies]
+herdr-plugin = "0.1.1"
 ```
 
 ## Runtime Example
@@ -161,13 +168,12 @@ let app = App::new().with_herdr_bin_path("/path/to/herdr");
 
 ## Design Notes
 
-- `herdr-dispatcher` is generic and reusable.
-- `herdr-runtime` is Herdr-aware and owns `App`, opaque `Context` services,
-  event sources, and typed Herdr event dispatch.
-- `herdr-client` currently shells out to the local `herdr` binary with
+- `herdr-plugin` is the single published SDK crate.
+- The generic dispatcher, runtime, and client implementations live inside
+  `herdr-plugin` so users only depend on one crate.
+- The client currently shells out to the local `herdr` binary with
   `tokio::process::Command`.
 - Socket transport support is planned, but not implemented yet.
-- `herdr-plugin` is the primary crate plugin authors should import.
 
 The architecture is deliberately small so middleware, filters, handler priority,
 dynamic registration, and socket transport support can be added later without

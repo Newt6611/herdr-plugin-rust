@@ -106,7 +106,7 @@ fn event_payload_structs_match_workspace_tab_and_pane_info_shapes() {
 
 #[tokio::test]
 async fn app_can_register_sdk_event_types() {
-    let mut app = App::new();
+    let mut app = App::builder().build().unwrap();
 
     app.on::<TabRenamed>(tab_renamed);
 }

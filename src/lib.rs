@@ -17,7 +17,13 @@ mod worktree;
 
 mod context;
 
-use std::{error::Error, future::Future, path::PathBuf, pin::Pin, sync::Arc};
+use std::{
+    error::Error,
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::Arc,
+};
 
 pub use agent::{
     AgentClient, AgentExplainOptions, AgentReadOptions, AgentReadSource, AgentStartOptions,
@@ -47,6 +53,7 @@ pub use pane::{
     Direction, PaneClient, PaneListOptions, PaneMoveDestination, PaneMoveOptions, PaneSelector,
     PaneSplitOptions, PaneZoomMode,
 };
+use serde::de::DeserializeOwned;
 pub use session::SessionClient;
 pub use tab::{TabClient, TabCreateOptions, TabListOptions};
 pub use workspace::{WorkspaceClient, WorkspaceCreateOptions};
@@ -59,10 +66,29 @@ pub type SetupError = Box<dyn Error + Send + Sync + 'static>;
 pub type SetupResult<T = ()> = Result<T, SetupError>;
 pub type RuntimeResult<T = ()> = Result<T, RuntimeError>;
 type SetupFuture = Pin<Box<dyn Future<Output = Result<(), SetupError>> + Send + 'static>>;
-type SetupHandler<State> = Box<dyn Fn(Context<State>) -> SetupFuture + Send + Sync + 'static>;
+type SetupHandler<State, Config> =
+    Box<dyn Fn(Context<State, Config>) -> SetupFuture + Send + Sync + 'static>;
 type ErrorFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-type ErrorHandler<State> =
-    Box<dyn Fn(Context<State>, String) -> ErrorFuture + Send + Sync + 'static>;
+type ErrorHandler<State, Config> =
+    Box<dyn Fn(Context<State, Config>, String) -> ErrorFuture + Send + Sync + 'static>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("HERDR_PLUGIN_CONFIG_DIR is required to load a relative config path")]
+    MissingConfigDir,
+    #[error("failed to read config file at {path}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to parse config file at {path}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -82,83 +108,195 @@ pub enum RuntimeError {
         #[source]
         source: SetupError,
     },
+    #[error("failed to load plugin config")]
+    Config {
+        #[source]
+        source: ConfigError,
+    },
 }
 
 /// Runtime application facade used to register and dispatch typed events.
-pub struct App<State = ()> {
-    context: Context<State>,
-    dispatcher: EventDispatcher<Context<State>>,
-    setup_handlers: Vec<SetupHandler<State>>,
-    teardown_handlers: Vec<SetupHandler<State>>,
-    error_handlers: Vec<ErrorHandler<State>>,
-    herdr_bin_path_override: Option<PathBuf>,
+pub struct App<State = (), Config = ()> {
+    context: Context<State, Config>,
+    event: Option<RuntimeEvent>,
+    dispatcher: EventDispatcher<Context<State, Config>>,
+    setup_handlers: Vec<SetupHandler<State, Config>>,
+    teardown_handlers: Vec<SetupHandler<State, Config>>,
+    error_handlers: Vec<ErrorHandler<State, Config>>,
 }
 
 impl App<()> {
-    /// Creates an app.
+    /// Creates a builder for configuring and constructing an app.
+    pub fn builder() -> AppBuilder {
+        AppBuilder::new()
+    }
+
+    /// Creates an app with default builder settings.
+    ///
+    /// Prefer [`App::builder`] when configuration or typed config loading is needed.
     pub fn new() -> Self {
-        Self::with_client(HerdrClient::new())
+        Self::builder()
+            .build()
+            .expect("failed to build Herdr plugin app")
     }
 
     /// Creates an app using an existing Herdr client handle.
     pub fn with_client(client: impl Into<Arc<HerdrClient>>) -> Self {
+        Self::builder()
+            .with_client(client)
+            .build()
+            .expect("failed to build Herdr plugin app")
+    }
+}
+
+pub struct AppBuilder<State = (), Config = ()> {
+    client: Option<Arc<HerdrClient>>,
+    state: Arc<State>,
+    config: Arc<Config>,
+    config_path: Option<PathBuf>,
+    herdr_bin_path_override: Option<PathBuf>,
+}
+
+impl AppBuilder {
+    pub fn new() -> Self {
         Self {
-            context: Context::new(client),
-            dispatcher: EventDispatcher::default(),
-            setup_handlers: Vec::new(),
-            teardown_handlers: Vec::new(),
-            error_handlers: Vec::new(),
+            client: None,
+            state: Arc::new(()),
+            config: Arc::new(()),
+            config_path: None,
             herdr_bin_path_override: None,
         }
     }
 }
 
-impl<State> App<State>
+impl Default for AppBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<CurrentState, Config> AppBuilder<CurrentState, Config>
 where
-    State: Send + Sync + 'static,
+    CurrentState: Send + Sync + 'static,
+    Config: Send + Sync + 'static,
 {
+    /// Uses an existing Herdr client handle.
+    pub fn with_client(mut self, client: impl Into<Arc<HerdrClient>>) -> Self {
+        self.client = Some(client.into());
+        self
+    }
+
     /// Attaches typed state that setup callbacks and event handlers can access through `Context`.
-    ///
-    /// Call this early in the builder chain, before registering setup callbacks
-    /// or event handlers that need the state type.
-    pub fn with_state<NextState>(self, state: NextState) -> App<NextState>
+    pub fn with_state<State>(self, state: State) -> AppBuilder<State, Config>
     where
-        NextState: Send + Sync + 'static,
+        State: Send + Sync + 'static,
     {
-        assert!(
-            self.dispatcher.is_empty() && self.setup_handlers.is_empty(),
-            "with_state must be called before registering setup callbacks or event handlers"
-        );
-
-        let state = Arc::new(state);
-
-        App {
-            context: Context::with_env_and_state(
-                self.context.client_handle(),
-                self.context.env().clone(),
-                state,
-            ),
-            dispatcher: EventDispatcher::default(),
-            setup_handlers: Vec::new(),
-            teardown_handlers: Vec::new(),
-            error_handlers: Vec::new(),
+        AppBuilder {
+            client: self.client,
+            state: Arc::new(state),
+            config: self.config,
+            config_path: self.config_path,
             herdr_bin_path_override: self.herdr_bin_path_override,
         }
     }
 
-    /// Sets the Herdr binary path used by the client passed to event handlers.
+    /// Loads typed plugin config from `$HERDR_PLUGIN_CONFIG_DIR/config.toml`.
+    ///
+    /// Missing config files use `Default::default()`. Invalid TOML returns
+    /// [`RuntimeError::Config`].
+    pub fn with_config<NextConfig>(self) -> AppBuilder<CurrentState, NextConfig>
+    where
+        NextConfig: DeserializeOwned + Default + Send + Sync + 'static,
+    {
+        self.with_config_file("config.toml")
+    }
+
+    /// Loads typed plugin config from a custom TOML path.
+    ///
+    /// Relative paths are resolved under `HERDR_PLUGIN_CONFIG_DIR`; absolute
+    /// paths are used as-is.
+    pub fn with_config_file<NextConfig>(
+        self,
+        path: impl Into<PathBuf>,
+    ) -> AppBuilder<CurrentState, NextConfig>
+    where
+        NextConfig: DeserializeOwned + Default + Send + Sync + 'static,
+    {
+        let path = path.into();
+        AppBuilder {
+            client: self.client,
+            state: self.state,
+            config: Arc::new(NextConfig::default()),
+            config_path: Some(path),
+            herdr_bin_path_override: self.herdr_bin_path_override,
+        }
+    }
+
+    /// Alias for [`AppBuilder::with_config_file`] when a call site wants to emphasize
+    /// that the argument may be absolute.
+    pub fn with_config_path<NextConfig>(
+        self,
+        path: impl Into<PathBuf>,
+    ) -> AppBuilder<CurrentState, NextConfig>
+    where
+        NextConfig: DeserializeOwned + Default + Send + Sync + 'static,
+    {
+        self.with_config_file(path)
+    }
+
+    /// Sets the Herdr binary path used by the client passed to handlers.
     pub fn with_herdr_bin_path(mut self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let mut env = self.context.env().clone();
-        let client = Arc::new(HerdrClient::with_binary(path.clone()));
+        self.client = Some(Arc::new(HerdrClient::with_binary(path.clone())));
         self.herdr_bin_path_override = Some(path.clone());
-        env.bin_path = Some(path);
-        self.context = Context::with_env_and_state(client, env, self.context.state_handle());
         self
     }
 
+    /// Reads the current Herdr environment, loads configured services, and returns a ready app.
+    pub fn build(self) -> Result<App<CurrentState, Config>, RuntimeError>
+    where
+        Config: DeserializeOwned + Default,
+    {
+        let mut output = EnvEventSource::from_env()?;
+        if let Some(path) = self.herdr_bin_path_override.as_ref() {
+            output.env.bin_path = Some(path.clone());
+        }
+
+        let client = self.client.unwrap_or_else(|| {
+            output
+                .env
+                .bin_path
+                .as_ref()
+                .map(|path| Arc::new(HerdrClient::with_binary(path.clone())))
+                .unwrap_or_else(|| Arc::new(HerdrClient::new()))
+        });
+
+        let config = match self.config_path.as_ref() {
+            Some(path) => Arc::new(
+                load_config::<Config>(&output.env, path)
+                    .map_err(|source| RuntimeError::Config { source })?,
+            ),
+            None => self.config,
+        };
+
+        Ok(App {
+            context: Context::with_env_state_and_config(client, output.env, self.state, config),
+            event: output.event,
+            dispatcher: EventDispatcher::default(),
+            setup_handlers: Vec::new(),
+            teardown_handlers: Vec::new(),
+            error_handlers: Vec::new(),
+        })
+    }
+}
+
+impl<State, Config> App<State, Config>
+where
+    State: Send + Sync + 'static,
+    Config: Send + Sync + 'static,
+{
     /// Registers an async handler for a concrete event type.
-    pub fn on<E>(&mut self, handler: impl Handler<Context<State>, E>) -> &mut Self
+    pub fn on<E>(&mut self, handler: impl Handler<Context<State, Config>, E>) -> &mut Self
     where
         E: Event,
     {
@@ -167,7 +305,7 @@ where
     }
 
     /// Registers an async event handler and returns the app for builder chaining.
-    pub fn on_event<E>(mut self, handler: impl Handler<Context<State>, E>) -> Self
+    pub fn on_event<E>(mut self, handler: impl Handler<Context<State, Config>, E>) -> Self
     where
         E: Event,
     {
@@ -181,7 +319,7 @@ where
     /// same populated [`Context`] as event handlers.
     pub fn setup<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(Context<State>) -> Fut + Send + Sync + 'static,
+        F: Fn(Context<State, Config>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<(), SetupError>> + Send + 'static,
     {
         self.setup_handlers
@@ -192,7 +330,7 @@ where
     /// Registers a teardown callback that runs after event dispatch completes.
     pub fn teardown<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(Context<State>) -> Fut + Send + Sync + 'static,
+        F: Fn(Context<State, Config>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<(), SetupError>> + Send + 'static,
     {
         self.teardown_handlers
@@ -203,7 +341,7 @@ where
     /// Registers a callback that runs before `run` returns a runtime error.
     pub fn on_error<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(Context<State>, String) -> Fut + Send + Sync + 'static,
+        F: Fn(Context<State, Config>, String) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         self.error_handlers.push(Box::new(move |context, error| {
@@ -214,25 +352,12 @@ where
 
     /// Runs the app for the current Herdr plugin invocation.
     pub async fn run(mut self) -> Result<(), RuntimeError> {
-        let mut output = match EnvEventSource::from_env() {
-            Ok(output) => output,
-            Err(error) => return self.return_error(error).await,
-        };
-        if let Some(path) = self.herdr_bin_path_override.as_ref() {
-            output.env.bin_path = Some(path.clone());
-        }
-
-        self.context = Context::with_env_and_state(
-            self.context.client_handle(),
-            output.env,
-            self.context.state_handle(),
-        );
         for handler in &self.setup_handlers {
             if let Err(source) = handler(self.context.clone()).await {
                 return self.return_error(RuntimeError::Setup { source }).await;
             }
         }
-        if let Some(event) = output.event {
+        if let Some(event) = self.event.take() {
             event.dispatch(&self.dispatcher, self.context.clone()).await;
         }
         for handler in &self.teardown_handlers {
@@ -256,6 +381,33 @@ impl Default for App<()> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn load_config<Config>(env: &HerdrEnv, path: &Path) -> Result<Config, ConfigError>
+where
+    Config: DeserializeOwned + Default,
+{
+    let path = resolve_config_path(env, path)?;
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Config::default())
+        }
+        Err(source) => return Err(ConfigError::Read { path, source }),
+    };
+
+    toml::from_str(&contents).map_err(|source| ConfigError::Parse { path, source })
+}
+
+fn resolve_config_path(env: &HerdrEnv, path: &Path) -> Result<PathBuf, ConfigError> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    env.plugin_config_dir
+        .as_ref()
+        .map(|dir| dir.join(path))
+        .ok_or(ConfigError::MissingConfigDir)
 }
 
 /// A Herdr plugin module that registers event handlers on an application.

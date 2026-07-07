@@ -9,4 +9,5 @@ publish = false
 
 [dependencies]
 herdr-plugin = { path = "../.." }
+serde = { workspace = true, features = ["derive"] }
 tokio.workspace = true

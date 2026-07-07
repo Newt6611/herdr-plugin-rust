@@ -6,33 +6,36 @@ use std::{
 use crate::{env::HerdrEnv, events::EventKind, logger::Logger, HerdrClient};
 
 /// Shared context passed to every plugin event handler.
-pub struct Context<State = ()> {
-    services: Arc<RuntimeServices<State>>,
+pub struct Context<State = (), Config = ()> {
+    services: Arc<RuntimeServices<State, Config>>,
 }
 
-struct RuntimeServices<State> {
+struct RuntimeServices<State, Config> {
     client: Arc<HerdrClient>,
     env: Arc<HerdrEnv>,
     state: Arc<State>,
+    config: Arc<Config>,
 }
 
 impl Context<()> {
     pub fn new(client: impl Into<Arc<HerdrClient>>) -> Self {
-        Self::with_env_and_state(client, HerdrEnv::from_env(), Arc::new(()))
+        Self::with_env_state_and_config(client, HerdrEnv::from_env(), Arc::new(()), Arc::new(()))
     }
 }
 
-impl<State> Context<State> {
-    pub(crate) fn with_env_and_state(
+impl<State, Config> Context<State, Config> {
+    pub(crate) fn with_env_state_and_config(
         client: impl Into<Arc<HerdrClient>>,
         env: HerdrEnv,
         state: Arc<State>,
+        config: Arc<Config>,
     ) -> Self {
         Self {
             services: Arc::new(RuntimeServices {
                 client: client.into(),
                 env: Arc::new(env),
                 state,
+                config,
             }),
         }
     }
@@ -47,6 +50,10 @@ impl<State> Context<State> {
 
     pub fn state(&self) -> &State {
         &self.services.state
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.services.config
     }
 
     pub fn log(&self) -> Logger<'_> {
@@ -84,17 +91,9 @@ impl<State> Context<State> {
     pub fn state_path(&self, path: impl AsRef<Path>) -> Option<PathBuf> {
         self.state_dir().map(|dir| dir.join(path))
     }
-
-    pub(crate) fn client_handle(&self) -> Arc<HerdrClient> {
-        self.services.client.clone()
-    }
-
-    pub(crate) fn state_handle(&self) -> Arc<State> {
-        self.services.state.clone()
-    }
 }
 
-impl<State> Clone for Context<State> {
+impl<State, Config> Clone for Context<State, Config> {
     fn clone(&self) -> Self {
         Self {
             services: self.services.clone(),

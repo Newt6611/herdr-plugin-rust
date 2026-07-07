@@ -14,6 +14,7 @@ use herdr_plugin::{
     events::{Event, EventKind, TabRenamed},
     App, Context, PluginInvocationContext, RuntimeError,
 };
+use serde::Deserialize;
 use tokio::sync::Mutex;
 
 #[cfg(unix)]
@@ -116,7 +117,7 @@ async fn app_builder_runs_event_from_env() {
         }"#,
     )]);
     let seen = Arc::new(Mutex::new(Vec::<u64>::new()));
-    let app = App::new().on_event::<TabRenamed>({
+    let app = App::builder().build().unwrap().on_event::<TabRenamed>({
         let seen = seen.clone();
         move |_ctx: Context, event: TabRenamed| {
             let seen = seen.clone();
@@ -146,17 +147,21 @@ async fn app_with_client_shares_arc_client_with_handlers() {
     )]);
     let client = Arc::new(HerdrClient::with_binary("/definitely/missing/herdr"));
     let seen_same_client = Arc::new(Mutex::new(false));
-    let app = App::with_client(client.clone()).on_event::<TabRenamed>({
-        let client = client.clone();
-        let seen_same_client = seen_same_client.clone();
-        move |ctx: Context, _event: TabRenamed| {
+    let app = App::builder()
+        .with_client(client.clone())
+        .build()
+        .unwrap()
+        .on_event::<TabRenamed>({
             let client = client.clone();
             let seen_same_client = seen_same_client.clone();
-            async move {
-                *seen_same_client.lock().await = std::ptr::eq(ctx.client(), client.as_ref());
+            move |ctx: Context, _event: TabRenamed| {
+                let client = client.clone();
+                let seen_same_client = seen_same_client.clone();
+                async move {
+                    *seen_same_client.lock().await = std::ptr::eq(ctx.client(), client.as_ref());
+                }
             }
-        }
-    });
+        });
     app.run().await.unwrap();
 
     assert!(*seen_same_client.lock().await);
@@ -184,8 +189,10 @@ fi
 exit 99"#,
     ));
     let seen_session_count = Arc::new(Mutex::new(None));
-    let app = App::new()
+    let app = App::builder()
         .with_herdr_bin_path(herdr)
+        .build()
+        .unwrap()
         .on_event::<TabRenamed>({
             let seen_session_count = seen_session_count.clone();
             move |ctx: Context, _event: TabRenamed| {
@@ -219,7 +226,9 @@ async fn setup_runs_with_context_before_event_dispatch() {
         ),
     ]);
     let calls = Arc::new(Mutex::new(Vec::<String>::new()));
-    let app = App::new()
+    let app = App::builder()
+        .build()
+        .unwrap()
         .setup({
             let calls = calls.clone();
             move |ctx: Context| {
@@ -268,10 +277,12 @@ async fn app_state_is_available_to_setup_and_event_handlers() {
         }"#,
     )]);
     let calls = Arc::new(Mutex::new(Vec::<String>::new()));
-    let app = App::new()
+    let app = App::builder()
         .with_state(State {
             prefix: "state".to_string(),
         })
+        .build()
+        .unwrap()
         .setup({
             let calls = calls.clone();
             move |ctx: Context<State>| {
@@ -324,7 +335,7 @@ async fn context_exposes_invocation_helpers_paths_and_logger() {
         ),
     ]);
     let captured = Arc::new(Mutex::new(None));
-    let app = App::new().setup({
+    let app = App::builder().build().unwrap().setup({
         let captured = captured.clone();
         move |ctx: Context| {
             let captured = captured.clone();
@@ -352,6 +363,173 @@ async fn context_exposes_invocation_helpers_paths_and_logger() {
     assert!(captured.lock().await.is_some());
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct TestConfig {
+    label_prefix: String,
+    debounce_ms: u64,
+}
+
+#[tokio::test]
+async fn config_loads_default_toml_before_setup_and_event_dispatch() {
+    let config_dir = std::env::temp_dir().join(format!(
+        "herdr-plugin-config-{}-{}",
+        std::process::id(),
+        NEXT_FAKE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("config.toml"),
+        r#"
+label_prefix = "cfg"
+debounce_ms = 250
+"#,
+    )
+    .unwrap();
+
+    let _env = EnvGuard::set(&[
+        ("HERDR_PLUGIN_CONFIG_DIR", config_dir.to_str().unwrap()),
+        (
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{
+              "event":"tab_renamed",
+              "data":{
+                "type":"tab_renamed",
+                "tab_id":"w1:t1",
+                "workspace_id":"w1",
+                "label":"Renamed"
+              }
+            }"#,
+        ),
+    ]);
+    let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+    let app = App::builder()
+        .with_config::<TestConfig>()
+        .build()
+        .unwrap()
+        .setup({
+            let calls = calls.clone();
+            move |ctx: Context<(), TestConfig>| {
+                let calls = calls.clone();
+                async move {
+                    calls
+                        .lock()
+                        .await
+                        .push(format!("setup:{}", ctx.config().label_prefix));
+                    Ok(())
+                }
+            }
+        })
+        .on_event::<TabRenamed>({
+            let calls = calls.clone();
+            move |ctx: Context<(), TestConfig>, event: TabRenamed| {
+                let calls = calls.clone();
+                async move {
+                    calls.lock().await.push(format!(
+                        "event:{}:{}:{}",
+                        ctx.config().label_prefix,
+                        ctx.config().debounce_ms,
+                        event.label
+                    ));
+                }
+            }
+        });
+
+    app.run().await.unwrap();
+
+    assert_eq!(*calls.lock().await, ["setup:cfg", "event:cfg:250:Renamed"]);
+}
+
+#[tokio::test]
+async fn config_can_load_custom_relative_toml_file() {
+    let config_dir = std::env::temp_dir().join(format!(
+        "herdr-plugin-config-{}-{}",
+        std::process::id(),
+        NEXT_FAKE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("settings.toml"),
+        r#"
+label_prefix = "settings"
+debounce_ms = 500
+"#,
+    )
+    .unwrap();
+
+    let _env = EnvGuard::set(&[("HERDR_PLUGIN_CONFIG_DIR", config_dir.to_str().unwrap())]);
+    let captured = Arc::new(Mutex::new(None));
+    let app = App::builder()
+        .with_config_file::<TestConfig>("settings.toml")
+        .build()
+        .unwrap()
+        .setup({
+            let captured = captured.clone();
+            move |ctx: Context<(), TestConfig>| {
+                let captured = captured.clone();
+                async move {
+                    *captured.lock().await =
+                        Some((ctx.config().label_prefix.clone(), ctx.config().debounce_ms));
+                    Ok(())
+                }
+            }
+        });
+
+    app.run().await.unwrap();
+
+    assert_eq!(*captured.lock().await, Some(("settings".to_string(), 500)));
+}
+
+#[tokio::test]
+async fn missing_config_file_uses_default_config() {
+    let config_dir = std::env::temp_dir().join(format!(
+        "herdr-plugin-config-{}-{}",
+        std::process::id(),
+        NEXT_FAKE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&config_dir).unwrap();
+
+    let _env = EnvGuard::set(&[("HERDR_PLUGIN_CONFIG_DIR", config_dir.to_str().unwrap())]);
+    let captured = Arc::new(Mutex::new(None));
+    let app = App::builder()
+        .with_config::<TestConfig>()
+        .build()
+        .unwrap()
+        .setup({
+            let captured = captured.clone();
+            move |ctx: Context<(), TestConfig>| {
+                let captured = captured.clone();
+                async move {
+                    *captured.lock().await =
+                        Some((ctx.config().label_prefix.clone(), ctx.config().debounce_ms));
+                    Ok(())
+                }
+            }
+        });
+
+    app.run().await.unwrap();
+
+    assert_eq!(*captured.lock().await, Some(("".to_string(), 0)));
+}
+
+#[tokio::test]
+async fn invalid_config_toml_returns_typed_runtime_error() {
+    let config_dir = std::env::temp_dir().join(format!(
+        "herdr-plugin-config-{}-{}",
+        std::process::id(),
+        NEXT_FAKE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(config_dir.join("config.toml"), "label_prefix = [").unwrap();
+
+    let _env = EnvGuard::set(&[("HERDR_PLUGIN_CONFIG_DIR", config_dir.to_str().unwrap())]);
+    let error = match App::builder().with_config::<TestConfig>().build() {
+        Ok(_) => panic!("expected invalid config to fail"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, RuntimeError::Config { .. }));
+}
+
 #[tokio::test]
 async fn teardown_runs_after_event_dispatch() {
     let _env = EnvGuard::set(&[(
@@ -367,7 +545,9 @@ async fn teardown_runs_after_event_dispatch() {
         }"#,
     )]);
     let calls = Arc::new(Mutex::new(Vec::<String>::new()));
-    let app = App::new()
+    let app = App::builder()
+        .build()
+        .unwrap()
         .on_event::<TabRenamed>({
             let calls = calls.clone();
             move |_ctx: Context, event: TabRenamed| {
@@ -397,7 +577,9 @@ async fn teardown_runs_after_event_dispatch() {
 async fn on_error_runs_when_setup_fails() {
     let _env = EnvGuard::set(&[]);
     let errors = Arc::new(Mutex::new(Vec::<String>::new()));
-    let app = App::new()
+    let app = App::builder()
+        .build()
+        .unwrap()
         .setup(|_ctx: Context| async {
             Err::<(), herdr_plugin::SetupError>(
                 std::io::Error::new(std::io::ErrorKind::Other, "setup failed").into(),
@@ -468,7 +650,7 @@ async fn app_new_reads_herdr_runtime_environment_into_context() {
         ("HERDR_PLUGIN_ENTRYPOINT_ID", "pane-command"),
     ]);
     let captured = Arc::new(Mutex::new(None));
-    let app = App::new().on_event::<TabRenamed>({
+    let app = App::builder().build().unwrap().on_event::<TabRenamed>({
         let captured = captured.clone();
         move |ctx: Context, _event: TabRenamed| {
             let captured = captured.clone();
@@ -529,7 +711,10 @@ async fn app_new_reads_herdr_runtime_environment_into_context() {
 #[tokio::test]
 async fn run_returns_typed_error_for_invalid_event_json() {
     let _env = EnvGuard::set(&[("HERDR_PLUGIN_EVENT_JSON", "not-json")]);
-    let error = App::new().run().await.unwrap_err();
+    let error = match App::builder().build() {
+        Ok(_) => panic!("expected invalid event json to fail"),
+        Err(error) => error,
+    };
 
     assert!(matches!(error, RuntimeError::InvalidEventJson { .. }));
 }

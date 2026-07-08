@@ -1,4 +1,4 @@
-use herdr_plugin::{App, Context, TabCreated};
+use herdr_plugin::{App, Context, EnvRuntime, TabCreated};
 use serde::Deserialize;
 
 struct PluginState {
@@ -41,6 +41,7 @@ async fn tab_created(ctx: Context<PluginState, PluginConfig>, event: TabCreated)
 #[tokio::main]
 async fn main() -> Result<(), herdr_plugin::RuntimeError> {
     App::builder()
+        .runtime(EnvRuntime::new())
         .with_state(PluginState {
             run_label: "minimal".to_string(),
         })

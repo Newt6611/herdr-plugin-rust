@@ -12,7 +12,8 @@ use herdr_plugin::HerdrClient;
 use herdr_plugin::{
     event_source::{EnvEventSource, RuntimeEvent},
     events::{Event, EventKind, TabRenamed},
-    App, Context, PluginInvocationContext, RuntimeError,
+    App, Context, EnvRuntime, EventSourceOutput, HerdrEnv, PluginInvocationContext, Runtime,
+    RuntimeApp, RuntimeError, RuntimeFuture,
 };
 use serde::Deserialize;
 use tokio::sync::Mutex;
@@ -129,6 +130,102 @@ async fn app_builder_runs_event_from_env() {
     app.run().await.unwrap();
 
     assert_eq!(*seen.lock().await, [7]);
+}
+
+#[tokio::test]
+async fn explicit_env_runtime_runs_event_from_env() {
+    let _env = EnvGuard::set(&[(
+        "HERDR_PLUGIN_EVENT_JSON",
+        r#"{
+          "event":"tab_renamed",
+          "data":{
+            "type":"tab_renamed",
+            "tab_id":"w1:t1",
+            "workspace_id":"w1",
+            "label":"Renamed"
+          }
+        }"#,
+    )]);
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let app = App::builder()
+        .runtime(EnvRuntime::new())
+        .build()
+        .unwrap()
+        .on_event::<TabRenamed>({
+            let seen = seen.clone();
+            move |_ctx: Context, event: TabRenamed| {
+                let seen = seen.clone();
+                async move {
+                    seen.lock().await.push(event.label);
+                }
+            }
+        });
+
+    app.run().await.unwrap();
+
+    assert_eq!(*seen.lock().await, ["Renamed"]);
+}
+
+struct RecordingRuntime {
+    calls: Arc<StdMutex<Vec<&'static str>>>,
+}
+
+impl<State, Config> Runtime<State, Config> for RecordingRuntime
+where
+    State: Send + Sync + 'static,
+    Config: serde::de::DeserializeOwned + Default + Send + Sync + 'static,
+{
+    fn run(self, mut app: RuntimeApp<State, Config>) -> RuntimeFuture {
+        Box::pin(async move {
+            self.calls.lock().unwrap().push("run");
+            app.initialize(EventSourceOutput {
+                env: HerdrEnv::default(),
+                event: None,
+            })?;
+            if let Err(source) = app.run_setup().await {
+                return app.return_error(RuntimeError::Setup { source }).await;
+            }
+            if let Err(source) = app.run_teardown().await {
+                return app.return_error(RuntimeError::Teardown { source }).await;
+            }
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn app_run_delegates_lifecycle_to_configured_runtime() {
+    let calls = Arc::new(StdMutex::new(Vec::new()));
+    let app = App::builder()
+        .runtime(RecordingRuntime {
+            calls: calls.clone(),
+        })
+        .build()
+        .unwrap()
+        .setup({
+            let calls = calls.clone();
+            move |_ctx: Context| {
+                let calls = calls.clone();
+                async move {
+                    calls.lock().unwrap().push("setup");
+                    Ok(())
+                }
+            }
+        })
+        .teardown({
+            let calls = calls.clone();
+            move |_ctx: Context| {
+                let calls = calls.clone();
+                async move {
+                    calls.lock().unwrap().push("teardown");
+                    Ok(())
+                }
+            }
+        });
+
+    app.run().await.unwrap();
+
+    assert_eq!(*calls.lock().unwrap(), ["run", "setup", "teardown"]);
 }
 
 #[tokio::test]
@@ -530,10 +627,8 @@ async fn invalid_config_toml_returns_typed_runtime_error() {
     fs::write(config_dir.join("config.toml"), "label_prefix = [").unwrap();
 
     let _env = EnvGuard::set(&[("HERDR_PLUGIN_CONFIG_DIR", config_dir.to_str().unwrap())]);
-    let error = match App::builder().with_config::<TestConfig>().build() {
-        Ok(_) => panic!("expected invalid config to fail"),
-        Err(error) => error,
-    };
+    let app = App::builder().with_config::<TestConfig>().build().unwrap();
+    let error = app.run().await.unwrap_err();
 
     assert!(matches!(error, RuntimeError::Config { .. }));
 }
@@ -719,10 +814,8 @@ async fn app_new_reads_herdr_runtime_environment_into_context() {
 #[tokio::test]
 async fn run_returns_typed_error_for_invalid_event_json() {
     let _env = EnvGuard::set(&[("HERDR_PLUGIN_EVENT_JSON", "not-json")]);
-    let error = match App::builder().build() {
-        Ok(_) => panic!("expected invalid event json to fail"),
-        Err(error) => error,
-    };
+    let app = App::builder().build().unwrap();
+    let error = app.run().await.unwrap_err();
 
     assert!(matches!(error, RuntimeError::InvalidEventJson { .. }));
 }

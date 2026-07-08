@@ -15,6 +15,7 @@ This project is early and intentionally incremental.
 Currently included:
 
 - typed runtime event handlers
+- runtime strategy abstraction for plugin lifecycle execution
 - workspace, tab, and pane event types
 - typed config loading from `HERDR_PLUGIN_CONFIG_DIR`
 - runtime state through `Context`
@@ -45,7 +46,7 @@ Plugin binaries still need to choose an executor; the examples use Tokio.
 ## Example
 
 ```rust
-use herdr_plugin::{App, Context, TabCreated};
+use herdr_plugin::{App, Context, EnvRuntime, TabCreated};
 use serde::Deserialize;
 
 #[derive(Debug)]
@@ -83,6 +84,7 @@ async fn tab_created(ctx: Context<State, Config>, event: TabCreated) {
 #[tokio::main]
 async fn main() -> Result<(), herdr_plugin::RuntimeError> {
     App::builder()
+        .runtime(EnvRuntime::new())
         .with_state(State {
             prefix: "tab".to_string(),
             seen_tabs: 0,
@@ -98,9 +100,31 @@ async fn main() -> Result<(), herdr_plugin::RuntimeError> {
 
 ## Runtime
 
-`App::builder()` reads Herdr's runtime environment during `build()`, loads
-optional typed config, creates the Herdr client, and prepares the event payload
-from `HERDR_PLUGIN_EVENT_JSON`.
+`App::builder()` records application state, config selection, handlers, and the
+runtime strategy. `build()` returns an app handle without reading Herdr's
+environment, loading config, or parsing an event payload.
+
+`App::run()` delegates lifecycle execution to the configured runtime. The
+default runtime is `EnvRuntime`, which performs one Herdr plugin invocation:
+
+1. read Herdr's runtime environment
+2. load optional typed config
+3. create the Herdr client
+4. parse `HERDR_PLUGIN_EVENT_JSON`
+5. run setup handlers
+6. dispatch the event
+7. run teardown handlers
+
+You can set the runtime explicitly:
+
+```rust
+let app = App::builder()
+    .runtime(EnvRuntime::new())
+    .with_config::<Config>()
+    .build()?;
+```
+
+The builder keeps runtime overrides until the runtime initializes the app:
 
 ```rust
 let app = App::builder()

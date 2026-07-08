@@ -6,6 +6,7 @@ use crate::{
     models::{
         PaneActionResponse, PaneCloseResponse, PaneCurrentResponse, PaneEdgesResponse,
         PaneInfoResponse, PaneLayoutResponse, PaneList, PaneProcessInfoResponse,
+        PluginPaneCloseResponse, PluginPaneFocusResponse, PluginPaneOpenResponse,
     },
 };
 
@@ -61,6 +62,53 @@ pub struct PaneMoveOptions {
     pub pane_id: String,
     pub destination: PaneMoveDestination,
     pub focus: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PluginPanePlacement {
+    Overlay,
+    Split,
+    Tab,
+    Zoomed,
+}
+
+impl PluginPanePlacement {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Overlay => "overlay",
+            Self::Split => "split",
+            Self::Tab => "tab",
+            Self::Zoomed => "zoomed",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PluginPaneDirection {
+    Right,
+    Down,
+}
+
+impl PluginPaneDirection {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Right => "right",
+            Self::Down => "down",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginPaneOpenOptions {
+    pub plugin_id: String,
+    pub entrypoint: String,
+    pub placement: Option<PluginPanePlacement>,
+    pub workspace_id: Option<String>,
+    pub target_pane_id: Option<String>,
+    pub direction: Option<PluginPaneDirection>,
+    pub cwd: Option<PathBuf>,
+    pub focus: bool,
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -330,6 +378,71 @@ impl<'a> PaneClient<'a> {
     pub async fn close(&self, pane_id: &str) -> Result<PaneCloseResponse, HerdrError> {
         self.client
             .run_json_result(["pane", "close", pane_id])
+            .await
+    }
+
+    pub async fn open_plugin_pane(
+        &self,
+        options: PluginPaneOpenOptions,
+    ) -> Result<PluginPaneOpenResponse, HerdrError> {
+        let mut args = vec![
+            "plugin".to_owned(),
+            "pane".to_owned(),
+            "open".to_owned(),
+            "--plugin".to_owned(),
+            options.plugin_id,
+            "--entrypoint".to_owned(),
+            options.entrypoint,
+        ];
+
+        if let Some(placement) = options.placement {
+            args.push("--placement".to_owned());
+            args.push(placement.as_str().to_owned());
+        }
+        if let Some(workspace_id) = options.workspace_id {
+            args.push("--workspace".to_owned());
+            args.push(workspace_id);
+        }
+        if let Some(target_pane_id) = options.target_pane_id {
+            args.push("--target-pane".to_owned());
+            args.push(target_pane_id);
+        }
+        if let Some(direction) = options.direction {
+            args.push("--direction".to_owned());
+            args.push(direction.as_str().to_owned());
+        }
+        if let Some(cwd) = options.cwd {
+            args.push("--cwd".to_owned());
+            args.push(cwd.display().to_string());
+        }
+        for (key, value) in options.env {
+            args.push("--env".to_owned());
+            args.push(format!("{key}={value}"));
+        }
+        if options.focus {
+            args.push("--focus".to_owned());
+        } else {
+            args.push("--no-focus".to_owned());
+        }
+
+        self.client.run_json_result(args).await
+    }
+
+    pub async fn focus_plugin_pane(
+        &self,
+        pane_id: &str,
+    ) -> Result<PluginPaneFocusResponse, HerdrError> {
+        self.client
+            .run_json_result(["plugin", "pane", "focus", pane_id])
+            .await
+    }
+
+    pub async fn close_plugin_pane(
+        &self,
+        pane_id: &str,
+    ) -> Result<PluginPaneCloseResponse, HerdrError> {
+        self.client
+            .run_json_result(["plugin", "pane", "close", pane_id])
             .await
     }
 }

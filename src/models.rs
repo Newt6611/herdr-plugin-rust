@@ -359,6 +359,105 @@ pub struct PaneCloseResponse {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PluginPaneInfo {
+    pub plugin_id: String,
+    pub entrypoint: String,
+    pub pane: Pane,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PluginPaneOpenResponse {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub plugin_pane: PluginPaneInfo,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PluginPaneFocusResponse {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub plugin_pane: PluginPaneInfo,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PluginPaneCloseResponse {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub pane_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct InstalledPluginInfo {
+    pub plugin_id: String,
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub min_herdr_version: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub manifest_path: String,
+    pub plugin_root: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub platforms: Option<Vec<String>>,
+    #[serde(default)]
+    pub build: Vec<Value>,
+    #[serde(default)]
+    pub actions: Vec<Value>,
+    #[serde(default)]
+    pub events: Vec<Value>,
+    #[serde(default)]
+    pub panes: Vec<Value>,
+    #[serde(default)]
+    pub link_handlers: Vec<Value>,
+    #[serde(default)]
+    pub source: PluginSourceInfo,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
+pub struct PluginSourceInfo {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub subdir: Option<String>,
+    #[serde(default)]
+    pub requested_ref: Option<String>,
+    #[serde(default)]
+    pub resolved_commit: Option<String>,
+    #[serde(default)]
+    pub managed_path: Option<String>,
+    #[serde(default)]
+    pub installed_unix_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PluginListResponse {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub plugins: Vec<InstalledPluginInfo>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PluginEnableResponse {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub plugin: InstalledPluginInfo,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct PluginDisableResponse {
+    #[serde(rename = "type")]
+    pub response_type: String,
+    pub plugin: InstalledPluginInfo,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct AgentList {
     #[serde(rename = "type")]
     pub response_type: String,

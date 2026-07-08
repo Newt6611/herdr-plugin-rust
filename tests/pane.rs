@@ -6,7 +6,7 @@ use std::{
 
 use herdr_plugin::{
     Direction, HerdrClient, HerdrError, PaneListOptions, PaneMoveDestination, PaneMoveOptions,
-    PaneSelector, PaneSplitOptions,
+    PaneSelector, PaneSplitOptions, PluginPaneOpenOptions, PluginPanePlacement,
 };
 
 #[cfg(unix)]
@@ -261,6 +261,48 @@ esac"#,
         })
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn plugin_pane_methods_live_on_pane_client() {
+    let herdr = fake_herdr(&script(
+        r#"case "$*" in
+  "plugin pane open --plugin herdr-beacon --entrypoint beacon --placement overlay --env KEY=VALUE --focus")
+    printf '%s\n' '{"id":"cli:plugin:pane:open","result":{"plugin_pane":{"entrypoint":"beacon","pane":{"agent_status":"unknown","cwd":"/repo","focused":true,"foreground_cwd":"/repo","label":"Beacon","pane_id":"wT:p9","revision":0,"tab_id":"wT:t1","terminal_id":"term_9","workspace_id":"wT"},"plugin_id":"herdr-beacon"},"type":"plugin_pane_opened"}}'
+    ;;
+  "plugin pane focus wT:p9")
+    printf '%s\n' '{"id":"cli:plugin:pane:focus","result":{"plugin_pane":{"entrypoint":"beacon","pane":{"agent_status":"unknown","cwd":"/repo","focused":true,"foreground_cwd":"/repo","label":"Beacon","pane_id":"wT:p9","revision":0,"tab_id":"wT:t1","terminal_id":"term_9","workspace_id":"wT"},"plugin_id":"herdr-beacon"},"type":"plugin_pane_focused"}}'
+    ;;
+  "plugin pane close wT:p9")
+    printf '%s\n' '{"id":"cli:plugin:pane:close","result":{"pane_id":"wT:p9","type":"plugin_pane_closed"}}'
+    ;;
+  *) exit 99 ;;
+esac"#,
+    ));
+    let client = HerdrClient::with_binary(herdr);
+
+    let opened = client
+        .pane()
+        .open_plugin_pane(PluginPaneOpenOptions {
+            plugin_id: "herdr-beacon".to_owned(),
+            entrypoint: "beacon".to_owned(),
+            placement: Some(PluginPanePlacement::Overlay),
+            workspace_id: None,
+            target_pane_id: None,
+            direction: None,
+            cwd: None,
+            focus: true,
+            env: vec![("KEY".to_owned(), "VALUE".to_owned())],
+        })
+        .await
+        .unwrap();
+    assert_eq!(opened.plugin_pane.pane.pane_id, "wT:p9");
+
+    let focused = client.pane().focus_plugin_pane("wT:p9").await.unwrap();
+    assert_eq!(focused.plugin_pane.plugin_id, "herdr-beacon");
+
+    let closed = client.pane().close_plugin_pane("wT:p9").await.unwrap();
+    assert_eq!(closed.pane_id, "wT:p9");
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ use crate::{
     agent::AgentClient,
     error::{HerdrCommandError, HerdrCommandErrorBody, HerdrError},
     pane::PaneClient,
+    plugin::PluginClient,
     session::SessionClient,
     tab::TabClient,
     workspace::WorkspaceClient,
@@ -54,6 +55,10 @@ impl HerdrClient {
 
     pub fn agent(&self) -> AgentClient<'_> {
         AgentClient::new(self)
+    }
+
+    pub fn plugin(&self) -> PluginClient<'_> {
+        PluginClient::new(self)
     }
 
     pub(crate) async fn run_json<T>(

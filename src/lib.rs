@@ -10,6 +10,7 @@ pub mod events;
 pub mod logger;
 mod models;
 mod pane;
+mod plugin;
 mod session;
 mod tab;
 mod workspace;
@@ -39,20 +40,24 @@ pub use event_source::{EventSourceOutput, RuntimeEvent};
 pub use events::*;
 pub use logger::Logger;
 pub use models::{
-    AgentInfoResponse, AgentList, AgentReadResponse, DeleteSessionResponse, Pane,
-    PaneActionResponse, PaneCloseResponse, PaneCurrentResponse, PaneEdgesResponse,
+    AgentInfoResponse, AgentList, AgentReadResponse, DeleteSessionResponse, InstalledPluginInfo,
+    Pane, PaneActionResponse, PaneCloseResponse, PaneCurrentResponse, PaneEdgesResponse,
     PaneInfoResponse, PaneLayout, PaneLayoutResponse, PaneList, PaneProcessInfoResponse, PaneRead,
-    PaneRect, PaneSplit, PaneSplitPane, ProcessInfo, ProcessInfoProcess, Session, SessionList,
-    StopSessionResponse, Tab, TabCloseResponse, TabCreateResponse, TabInfoResponse, TabList,
-    TabPane, Workspace, WorkspaceCloseResponse, WorkspaceCreateResponse, WorkspaceInfoResponse,
-    WorkspaceList, WorkspacePane, WorkspaceTab, WorkspaceWorktree, Worktree,
+    PaneRect, PaneSplit, PaneSplitPane, PluginDisableResponse, PluginEnableResponse,
+    PluginListResponse, PluginPaneCloseResponse, PluginPaneFocusResponse, PluginPaneInfo,
+    PluginPaneOpenResponse, PluginSourceInfo, ProcessInfo, ProcessInfoProcess, Session,
+    SessionList, StopSessionResponse, Tab, TabCloseResponse, TabCreateResponse, TabInfoResponse,
+    TabList, TabPane, Workspace, WorkspaceCloseResponse, WorkspaceCreateResponse,
+    WorkspaceInfoResponse, WorkspaceList, WorkspacePane, WorkspaceTab, WorkspaceWorktree, Worktree,
     WorktreeCreateResponse, WorktreeList, WorktreeOpenResponse, WorktreeRemoveResponse,
     WorktreeSourceInfo,
 };
 pub use pane::{
     Direction, PaneClient, PaneListOptions, PaneMoveDestination, PaneMoveOptions, PaneSelector,
-    PaneSplitOptions, PaneZoomMode,
+    PaneSplitOptions, PaneZoomMode, PluginPaneDirection, PluginPaneOpenOptions,
+    PluginPanePlacement,
 };
+pub use plugin::{PluginClient, PluginInstallOptions, PluginListOptions};
 use serde::de::DeserializeOwned;
 pub use session::SessionClient;
 pub use tab::{TabClient, TabCreateOptions, TabListOptions};

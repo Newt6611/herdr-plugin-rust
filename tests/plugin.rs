@@ -5,7 +5,9 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use herdr_plugin::{App, Context, HerdrClient, TabRenamed};
+use herdr_plugin::{
+    App, Context, HerdrClient, PluginInstallOptions, PluginListOptions, TabRenamed,
+};
 use serde::Deserialize;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -59,6 +61,99 @@ fn temp_config_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("herdr-plugin-test-{name}-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+#[cfg(unix)]
+fn fake_herdr(script: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_FAKE_ID: AtomicU64 = AtomicU64::new(0);
+
+    let id = NEXT_FAKE_ID.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "herdr-plugin-client-test-{}-{id}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+
+    let path = dir.join("herdr");
+    fs::write(&path, script).unwrap();
+
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).unwrap();
+
+    path
+}
+
+fn script(body: &str) -> String {
+    format!("#!/bin/sh\nset -eu\n{body}\n")
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn plugin_management_methods_use_expected_arguments() {
+    let herdr = fake_herdr(&script(
+        r#"case "$*" in
+  "plugin install owner/repo/tool --ref main --yes")
+    printf '%s\n' 'Installed example.tool from owner/repo/tool.'
+    ;;
+  "plugin list --json --plugin example.tool")
+    printf '%s\n' '{"id":"cli:plugin","result":{"plugins":[{"actions":[],"build":[],"enabled":true,"events":[],"link_handlers":[],"manifest_path":"/plugins/example/herdr-plugin.toml","min_herdr_version":"0.7.0","name":"Example Tool","panes":[],"plugin_id":"example.tool","plugin_root":"/plugins/example","source":{"kind":"local"},"version":"0.1.0","warnings":[]}],"type":"plugin_list"}}'
+    ;;
+  "plugin enable example.tool")
+    printf '%s\n' '{"id":"cli:plugin","result":{"plugin":{"actions":[],"build":[],"enabled":true,"events":[],"link_handlers":[],"manifest_path":"/plugins/example/herdr-plugin.toml","min_herdr_version":"0.7.0","name":"Example Tool","panes":[],"plugin_id":"example.tool","plugin_root":"/plugins/example","source":{"kind":"local"},"version":"0.1.0","warnings":[]},"type":"plugin_enabled"}}'
+    ;;
+  "plugin disable example.tool")
+    printf '%s\n' '{"id":"cli:plugin","result":{"plugin":{"actions":[],"build":[],"enabled":false,"events":[],"link_handlers":[],"manifest_path":"/plugins/example/herdr-plugin.toml","min_herdr_version":"0.7.0","name":"Example Tool","panes":[],"plugin_id":"example.tool","plugin_root":"/plugins/example","source":{"kind":"local"},"version":"0.1.0","warnings":[]},"type":"plugin_disabled"}}'
+    ;;
+  "plugin uninstall example.tool")
+    printf '%s\n' 'Uninstalled example.tool.'
+    ;;
+  *) exit 99 ;;
+esac"#,
+    ));
+    let client = HerdrClient::with_binary(herdr);
+
+    client
+        .plugin()
+        .install(PluginInstallOptions {
+            source: "owner/repo/tool".to_owned(),
+            requested_ref: Some("main".to_owned()),
+            yes: true,
+        })
+        .await
+        .unwrap();
+
+    let list = client
+        .plugin()
+        .list(PluginListOptions {
+            plugin_id: Some("example.tool".to_owned()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(list.plugins[0].plugin_id, "example.tool");
+
+    assert!(
+        client
+            .plugin()
+            .enable("example.tool")
+            .await
+            .unwrap()
+            .plugin
+            .enabled
+    );
+    assert!(
+        !client
+            .plugin()
+            .disable("example.tool")
+            .await
+            .unwrap()
+            .plugin
+            .enabled
+    );
+    client.plugin().uninstall("example.tool").await.unwrap();
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-use herdr_plugin::{App, Context, PaneFocused, TabCreated, WorkspaceCreated};
+use herdr_plugin::{App, Context, TabCreated};
 use serde::Deserialize;
 
 struct PluginState {
@@ -13,8 +13,11 @@ struct PluginConfig {
 async fn setup(ctx: Context<PluginState, PluginConfig>) -> Result<(), herdr_plugin::SetupError> {
     ctx.log()
         .info(format!("plugin id: {:?}", ctx.env().plugin_id));
-    ctx.log()
-        .info(format!("run label: {}", ctx.state().run_label));
+    let run_label = {
+        let state = ctx.state();
+        state.run_label.clone()
+    };
+    ctx.log().info(format!("run label: {run_label}"));
     ctx.log()
         .info(format!("label prefix: {}", ctx.config().label_prefix));
     ctx.log()
@@ -35,17 +38,6 @@ async fn tab_created(ctx: Context<PluginState, PluginConfig>, event: TabCreated)
     ));
 }
 
-async fn pane_focused(ctx: Context<PluginState, PluginConfig>, event: PaneFocused) {
-    ctx.log().info(format!("pane focused: {}", event.pane_id));
-}
-
-async fn workspace_created(ctx: Context<PluginState, PluginConfig>, event: WorkspaceCreated) {
-    ctx.log().info(format!(
-        "workspace created: {}",
-        event.workspace.workspace_id
-    ));
-}
-
 #[tokio::main]
 async fn main() -> Result<(), herdr_plugin::RuntimeError> {
     App::builder()
@@ -56,8 +48,6 @@ async fn main() -> Result<(), herdr_plugin::RuntimeError> {
         .build()?
         .setup(setup)
         .on_event::<TabCreated>(tab_created)
-        .on_event::<PaneFocused>(pane_focused)
-        .on_event::<WorkspaceCreated>(workspace_created)
         .teardown(|ctx: Context<PluginState, PluginConfig>| async move {
             ctx.log().info("plugin invocation finished");
             Ok(())

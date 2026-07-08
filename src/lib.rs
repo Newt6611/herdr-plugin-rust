@@ -22,7 +22,7 @@ use std::{
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 pub use agent::{
@@ -67,6 +67,8 @@ pub type SetupResult<T = ()> = Result<T, SetupError>;
 pub type RuntimeResult<T = ()> = Result<T, RuntimeError>;
 type SetupFuture = Pin<Box<dyn Future<Output = Result<(), SetupError>> + Send + 'static>>;
 type SetupHandler<State, Config> =
+    Box<dyn Fn(Context<State, Config>) -> SetupFuture + Send + Sync + 'static>;
+type TeardownHandler<State, Config> =
     Box<dyn Fn(Context<State, Config>) -> SetupFuture + Send + Sync + 'static>;
 type ErrorFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 type ErrorHandler<State, Config> =
@@ -121,7 +123,7 @@ pub struct App<State = (), Config = ()> {
     event: Option<RuntimeEvent>,
     dispatcher: EventDispatcher<Context<State, Config>>,
     setup_handlers: Vec<SetupHandler<State, Config>>,
-    teardown_handlers: Vec<SetupHandler<State, Config>>,
+    teardown_handlers: Vec<TeardownHandler<State, Config>>,
     error_handlers: Vec<ErrorHandler<State, Config>>,
 }
 
@@ -151,8 +153,8 @@ impl App<()> {
 
 pub struct AppBuilder<State = (), Config = ()> {
     client: Option<Arc<HerdrClient>>,
-    state: Arc<State>,
-    config: Arc<Config>,
+    state: State,
+    config: Config,
     config_path: Option<PathBuf>,
     herdr_bin_path_override: Option<PathBuf>,
 }
@@ -161,8 +163,8 @@ impl AppBuilder {
     pub fn new() -> Self {
         Self {
             client: None,
-            state: Arc::new(()),
-            config: Arc::new(()),
+            state: (),
+            config: (),
             config_path: None,
             herdr_bin_path_override: None,
         }
@@ -193,7 +195,7 @@ where
     {
         AppBuilder {
             client: self.client,
-            state: Arc::new(state),
+            state,
             config: self.config,
             config_path: self.config_path,
             herdr_bin_path_override: self.herdr_bin_path_override,
@@ -226,7 +228,7 @@ where
         AppBuilder {
             client: self.client,
             state: self.state,
-            config: Arc::new(NextConfig::default()),
+            config: NextConfig::default(),
             config_path: Some(path),
             herdr_bin_path_override: self.herdr_bin_path_override,
         }
@@ -271,16 +273,19 @@ where
                 .unwrap_or_else(|| Arc::new(HerdrClient::new()))
         });
 
-        let config = match self.config_path.as_ref() {
-            Some(path) => Arc::new(
-                load_config::<Config>(&output.env, path)
-                    .map_err(|source| RuntimeError::Config { source })?,
-            ),
+        let config = Arc::new(match self.config_path.as_ref() {
+            Some(path) => load_config::<Config>(&output.env, path)
+                .map_err(|source| RuntimeError::Config { source })?,
             None => self.config,
-        };
+        });
 
         Ok(App {
-            context: Context::with_env_state_and_config(client, output.env, self.state, config),
+            context: Context::with_env_state_and_config(
+                client,
+                output.env,
+                Arc::new(Mutex::new(self.state)),
+                config,
+            ),
             event: output.event,
             dispatcher: EventDispatcher::default(),
             setup_handlers: Vec::new(),
@@ -315,8 +320,8 @@ where
 
     /// Registers a setup callback that runs before the current event starts dispatching.
     ///
-    /// Setup callbacks run after Herdr environment parsing, so they receive the
-    /// same populated [`Context`] as event handlers.
+    /// Setup callbacks run before event dispatch and receive the same [`Context`]
+    /// as event handlers.
     pub fn setup<F, Fut>(mut self, handler: F) -> Self
     where
         F: Fn(Context<State, Config>) -> Fut + Send + Sync + 'static,
@@ -357,6 +362,7 @@ where
                 return self.return_error(RuntimeError::Setup { source }).await;
             }
         }
+
         if let Some(event) = self.event.take() {
             event.dispatch(&self.dispatcher, self.context.clone()).await;
         }
@@ -408,9 +414,4 @@ fn resolve_config_path(env: &HerdrEnv, path: &Path) -> Result<PathBuf, ConfigErr
         .as_ref()
         .map(|dir| dir.join(path))
         .ok_or(ConfigError::MissingConfigDir)
-}
-
-/// A Herdr plugin module that registers event handlers on an application.
-pub trait Plugin {
-    fn build(&self, app: &mut App);
 }

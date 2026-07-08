@@ -288,10 +288,12 @@ async fn app_state_is_available_to_setup_and_event_handlers() {
             move |ctx: Context<State>| {
                 let calls = calls.clone();
                 async move {
-                    calls
-                        .lock()
-                        .await
-                        .push(format!("setup:{}", ctx.state().prefix));
+                    let original_prefix = {
+                        let state = ctx.state();
+                        state.prefix.clone()
+                    };
+                    ctx.state_mut().prefix = "initialized".to_string();
+                    calls.lock().await.push(format!("setup:{original_prefix}"));
                     Ok(())
                 }
             }
@@ -301,18 +303,24 @@ async fn app_state_is_available_to_setup_and_event_handlers() {
             move |ctx: Context<State>, event: TabRenamed| {
                 let calls = calls.clone();
                 async move {
-                    calls.lock().await.push(format!(
-                        "event:{}:{}",
-                        ctx.state().prefix,
-                        event.label
-                    ));
+                    let prefix = {
+                        let state = ctx.state();
+                        state.prefix.clone()
+                    };
+                    calls
+                        .lock()
+                        .await
+                        .push(format!("event:{prefix}:{}", event.label));
                 }
             }
         });
 
     app.run().await.unwrap();
 
-    assert_eq!(*calls.lock().await, ["setup:state", "event:state:Renamed"]);
+    assert_eq!(
+        *calls.lock().await,
+        ["setup:state", "event:initialized:Renamed"]
+    );
 }
 
 #[tokio::test]
@@ -334,7 +342,7 @@ async fn context_exposes_invocation_helpers_paths_and_logger() {
             }"#,
         ),
     ]);
-    let captured = Arc::new(Mutex::new(None));
+    let captured = Arc::new(Mutex::new(false));
     let app = App::builder().build().unwrap().setup({
         let captured = captured.clone();
         move |ctx: Context| {
@@ -352,7 +360,7 @@ async fn context_exposes_invocation_helpers_paths_and_logger() {
                     ctx.state_path("state.json").as_deref(),
                     Some(Path::new("/tmp/herdr-state/state.json"))
                 );
-                *captured.lock().await = Some(ctx);
+                *captured.lock().await = true;
                 Ok(())
             }
         }
@@ -360,7 +368,7 @@ async fn context_exposes_invocation_helpers_paths_and_logger() {
 
     app.run().await.unwrap();
 
-    assert!(captured.lock().await.is_some());
+    assert!(*captured.lock().await);
 }
 
 #[derive(Debug, Default, Deserialize)]

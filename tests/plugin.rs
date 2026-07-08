@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use herdr_plugin::{App, Context, HerdrClient, Plugin, TabRenamed};
+use herdr_plugin::{App, Context, HerdrClient, TabRenamed};
 use serde::Deserialize;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -61,27 +61,8 @@ fn temp_config_dir(name: &str) -> PathBuf {
     dir
 }
 
-#[derive(Clone)]
-struct SearchPlugin {
-    seen: Arc<TokioMutex<Vec<String>>>,
-}
-
-impl Plugin for SearchPlugin {
-    fn build(&self, app: &mut App) {
-        app.on::<TabRenamed>({
-            let seen = self.seen.clone();
-            move |_ctx: Context, event: TabRenamed| {
-                let seen = seen.clone();
-                async move {
-                    seen.lock().await.push(event.label);
-                }
-            }
-        });
-    }
-}
-
 #[tokio::test]
-async fn plugin_build_registers_handlers_on_the_app() {
+async fn app_registers_handlers_directly() {
     let _env = EnvGuard::event_json(
         r#"{
           "event":"tab_renamed",
@@ -96,10 +77,62 @@ async fn plugin_build_registers_handlers_on_the_app() {
     let seen = Arc::new(TokioMutex::new(Vec::<String>::new()));
     let mut app = App::builder().build().unwrap();
 
-    SearchPlugin { seen: seen.clone() }.build(&mut app);
+    app.on::<TabRenamed>({
+        let seen = seen.clone();
+        move |_ctx: Context, event: TabRenamed| {
+            let seen = seen.clone();
+            async move {
+                seen.lock().await.push(event.label);
+            }
+        }
+    });
     app.run().await.unwrap();
 
     assert_eq!(*seen.lock().await, ["renamed"]);
+}
+
+#[tokio::test]
+async fn app_direct_registration_supports_typed_config_context() {
+    #[derive(Debug, Default, Deserialize)]
+    struct Config {
+        label_prefix: String,
+    }
+
+    let config_dir = temp_config_dir("plugin-config");
+    fs::write(config_dir.join("config.toml"), r#"label_prefix = "cfg""#).unwrap();
+    let _env = EnvGuard::set(&[
+        ("HERDR_PLUGIN_CONFIG_DIR", config_dir.to_str().unwrap()),
+        (
+            "HERDR_PLUGIN_EVENT_JSON",
+            r#"{
+              "event":"tab_renamed",
+              "data":{
+                "type":"tab_renamed",
+                "tab_id":"wT:t1",
+                "workspace_id":"wT",
+                "label":"renamed"
+              }
+            }"#,
+        ),
+    ]);
+
+    let seen = Arc::new(TokioMutex::new(Vec::<String>::new()));
+    let mut app = App::builder().with_config::<Config>().build().unwrap();
+
+    app.on::<TabRenamed>({
+        let seen = seen.clone();
+        move |ctx: Context<(), Config>, event: TabRenamed| {
+            let seen = seen.clone();
+            async move {
+                seen.lock()
+                    .await
+                    .push(format!("{}:{}", ctx.config().label_prefix, event.label));
+            }
+        }
+    });
+    app.run().await.unwrap();
+
+    assert_eq!(*seen.lock().await, ["cfg:renamed"]);
 }
 
 #[test]
@@ -128,7 +161,8 @@ fn plugin_surface_exposes_typed_app_state() {
         .build()
         .unwrap()
         .setup(|ctx: Context<State>| async move {
-            assert_eq!(ctx.state().value, 7);
+            let state = ctx.state();
+            assert_eq!(state.value, 7);
             Ok(())
         });
 }

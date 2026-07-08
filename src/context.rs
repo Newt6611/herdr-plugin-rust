@@ -1,11 +1,11 @@
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use crate::{env::HerdrEnv, events::EventKind, logger::Logger, HerdrClient};
 
-/// Shared context passed to every plugin event handler.
+/// Shared context passed to every plugin callback and event handler.
 pub struct Context<State = (), Config = ()> {
     services: Arc<RuntimeServices<State, Config>>,
 }
@@ -13,13 +13,18 @@ pub struct Context<State = (), Config = ()> {
 struct RuntimeServices<State, Config> {
     client: Arc<HerdrClient>,
     env: Arc<HerdrEnv>,
-    state: Arc<State>,
+    state: Arc<Mutex<State>>,
     config: Arc<Config>,
 }
 
 impl Context<()> {
     pub fn new(client: impl Into<Arc<HerdrClient>>) -> Self {
-        Self::with_env_state_and_config(client, HerdrEnv::from_env(), Arc::new(()), Arc::new(()))
+        Self::with_env_state_and_config(
+            client,
+            HerdrEnv::from_env(),
+            Arc::new(Mutex::new(())),
+            Arc::new(()),
+        )
     }
 }
 
@@ -27,7 +32,7 @@ impl<State, Config> Context<State, Config> {
     pub(crate) fn with_env_state_and_config(
         client: impl Into<Arc<HerdrClient>>,
         env: HerdrEnv,
-        state: Arc<State>,
+        state: Arc<Mutex<State>>,
         config: Arc<Config>,
     ) -> Self {
         Self {
@@ -48,8 +53,12 @@ impl<State, Config> Context<State, Config> {
         &self.services.env
     }
 
-    pub fn state(&self) -> &State {
-        &self.services.state
+    pub fn state(&self) -> MutexGuard<'_, State> {
+        self.services.state.lock().expect("state mutex poisoned")
+    }
+
+    pub fn state_mut(&self) -> MutexGuard<'_, State> {
+        self.services.state.lock().expect("state mutex poisoned")
     }
 
     pub fn config(&self) -> &Config {

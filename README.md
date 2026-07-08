@@ -35,7 +35,7 @@ cargo add tokio --features macros,rt-multi-thread # if using #[tokio::main]
 
 ```toml
 [dependencies]
-herdr-plugin = "0.1.4"
+herdr-plugin = "0.1.5"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] } # if using #[tokio::main]
 ```

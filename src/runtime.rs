@@ -25,15 +25,15 @@ where
 }
 
 #[derive(Debug, Default)]
-pub struct EnvRuntime;
+pub struct OneShotRuntime;
 
-impl EnvRuntime {
+impl OneShotRuntime {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl<State, Config> Runtime<State, Config> for EnvRuntime
+impl<State, Config> Runtime<State, Config> for OneShotRuntime
 where
     State: Send + Sync + 'static,
     Config: DeserializeOwned + Default + Send + Sync + 'static,

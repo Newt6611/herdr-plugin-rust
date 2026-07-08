@@ -59,7 +59,7 @@ pub use pane::{
 };
 pub use plugin::{PluginClient, PluginInstallOptions, PluginListOptions};
 pub use runtime::{
-    EnvRuntime, Runtime, RuntimeApp, RuntimeFuture, RuntimeHandle, RuntimeHandleError,
+    OneShotRuntime, Runtime, RuntimeApp, RuntimeFuture, RuntimeHandle, RuntimeHandleError,
 };
 use serde::de::DeserializeOwned;
 pub use session::SessionClient;
@@ -139,9 +139,9 @@ pub struct App<State, Config, AppRuntime> {
     error_handlers: Vec<ErrorHandler<State, Config>>,
 }
 
-impl App<(), (), EnvRuntime> {
+impl App<(), (), OneShotRuntime> {
     /// Creates a builder for configuring and constructing an app.
-    pub fn builder() -> AppBuilder<(), (), EnvRuntime> {
+    pub fn builder() -> AppBuilder<(), (), OneShotRuntime> {
         AppBuilder::new()
     }
 
@@ -172,7 +172,7 @@ pub struct AppBuilder<State, Config, AppRuntime> {
     runtime: AppRuntime,
 }
 
-impl AppBuilder<(), (), EnvRuntime> {
+impl AppBuilder<(), (), OneShotRuntime> {
     pub fn new() -> Self {
         Self {
             client: None,
@@ -180,12 +180,12 @@ impl AppBuilder<(), (), EnvRuntime> {
             config: (),
             config_path: None,
             herdr_bin_path_override: None,
-            runtime: EnvRuntime::new(),
+            runtime: OneShotRuntime::new(),
         }
     }
 }
 
-impl Default for AppBuilder<(), (), EnvRuntime> {
+impl Default for AppBuilder<(), (), OneShotRuntime> {
     fn default() -> Self {
         Self::new()
     }
@@ -388,7 +388,7 @@ where
     }
 }
 
-impl Default for App<(), (), EnvRuntime> {
+impl Default for App<(), (), OneShotRuntime> {
     fn default() -> Self {
         Self::new()
     }

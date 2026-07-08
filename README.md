@@ -35,7 +35,7 @@ cargo add tokio --features macros,rt-multi-thread # if using #[tokio::main]
 
 ```toml
 [dependencies]
-herdr-plugin = "0.1.5"
+herdr-plugin = "0.1.6"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] } # if using #[tokio::main]
 ```
@@ -46,7 +46,7 @@ Plugin binaries still need to choose an executor; the examples use Tokio.
 ## Example
 
 ```rust
-use herdr_plugin::{App, Context, EnvRuntime, TabCreated};
+use herdr_plugin::{App, Context, OneShotRuntime, TabCreated};
 use serde::Deserialize;
 
 #[derive(Debug)]
@@ -84,7 +84,7 @@ async fn tab_created(ctx: Context<State, Config>, event: TabCreated) {
 #[tokio::main]
 async fn main() -> Result<(), herdr_plugin::RuntimeError> {
     App::builder()
-        .runtime(EnvRuntime::new())
+        .runtime(OneShotRuntime::new())
         .with_state(State {
             prefix: "tab".to_string(),
             seen_tabs: 0,
@@ -105,7 +105,7 @@ runtime strategy. `build()` returns an app handle without reading Herdr's
 environment, loading config, or parsing an event payload.
 
 `App::run()` delegates lifecycle execution to the configured runtime. The
-default runtime is `EnvRuntime`, which performs one Herdr plugin invocation:
+default runtime is `OneShotRuntime`, which performs one Herdr plugin invocation:
 
 1. read Herdr's runtime environment
 2. load optional typed config
@@ -119,7 +119,7 @@ You can set the runtime explicitly:
 
 ```rust
 let app = App::builder()
-    .runtime(EnvRuntime::new())
+    .runtime(OneShotRuntime::new())
     .with_config::<Config>()
     .build()?;
 ```

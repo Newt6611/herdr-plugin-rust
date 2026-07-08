@@ -12,7 +12,7 @@ use herdr_plugin::HerdrClient;
 use herdr_plugin::{
     event_source::{EnvEventSource, RuntimeEvent},
     events::{Event, EventKind, TabRenamed},
-    App, Context, EnvRuntime, EventSourceOutput, HerdrEnv, PluginInvocationContext, Runtime,
+    App, Context, EventSourceOutput, HerdrEnv, OneShotRuntime, PluginInvocationContext, Runtime,
     RuntimeApp, RuntimeError, RuntimeFuture,
 };
 use serde::Deserialize;
@@ -133,7 +133,7 @@ async fn app_builder_runs_event_from_env() {
 }
 
 #[tokio::test]
-async fn explicit_env_runtime_runs_event_from_env() {
+async fn explicit_one_shot_runtime_runs_event_from_env() {
     let _env = EnvGuard::set(&[(
         "HERDR_PLUGIN_EVENT_JSON",
         r#"{
@@ -148,7 +148,7 @@ async fn explicit_env_runtime_runs_event_from_env() {
     )]);
     let seen = Arc::new(Mutex::new(Vec::<String>::new()));
     let app = App::builder()
-        .runtime(EnvRuntime::new())
+        .runtime(OneShotRuntime::new())
         .build()
         .unwrap()
         .on_event::<TabRenamed>({

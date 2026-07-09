@@ -6,6 +6,7 @@ use crate::{
     models::{
         WorkspaceCloseResponse, WorkspaceCreateResponse, WorkspaceInfoResponse, WorkspaceList,
     },
+    RuntimeHandle, RuntimeHandleError,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -87,4 +88,127 @@ impl<'a> WorkspaceClient<'a> {
             .run_json_result(["workspace", "close", workspace_id])
             .await
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SocketWorkspaceClient<'a> {
+    handle: &'a RuntimeHandle,
+}
+
+impl<'a> SocketWorkspaceClient<'a> {
+    pub(crate) fn new(handle: &'a RuntimeHandle) -> Self {
+        Self { handle }
+    }
+
+    pub async fn list(&self) -> Result<WorkspaceList, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:workspace:list",
+                "workspace.list",
+                json_object(),
+            )
+            .await
+    }
+
+    pub async fn create(
+        &self,
+        options: WorkspaceCreateOptions,
+    ) -> Result<WorkspaceCreateResponse, RuntimeHandleError> {
+        let mut params = serde_json::Map::new();
+        if let Some(cwd) = options.cwd {
+            params.insert(
+                "cwd".to_owned(),
+                serde_json::Value::String(cwd.display().to_string()),
+            );
+        }
+        if let Some(label) = options.label {
+            params.insert("label".to_owned(), serde_json::Value::String(label));
+        }
+        if !options.env.is_empty() {
+            params.insert(
+                "env".to_owned(),
+                serde_json::Value::Object(
+                    options
+                        .env
+                        .into_iter()
+                        .map(|(key, value)| (key, serde_json::Value::String(value)))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(focus) = options.focus {
+            params.insert("focus".to_owned(), serde_json::Value::Bool(focus));
+        }
+
+        self.handle
+            .request_json_result(
+                "herdr-plugin:workspace:create",
+                "workspace.create",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn get(
+        &self,
+        workspace_id: &str,
+    ) -> Result<WorkspaceInfoResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:workspace:get",
+                "workspace.get",
+                serde_json::json!({ "workspace_id": workspace_id }),
+            )
+            .await
+    }
+
+    pub async fn focus(
+        &self,
+        workspace_id: &str,
+    ) -> Result<WorkspaceInfoResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:workspace:focus",
+                "workspace.focus",
+                serde_json::json!({ "workspace_id": workspace_id }),
+            )
+            .await
+    }
+
+    pub async fn rename(
+        &self,
+        workspace_id: &str,
+        label: &str,
+    ) -> Result<WorkspaceInfoResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:workspace:rename",
+                "workspace.rename",
+                serde_json::json!({ "workspace_id": workspace_id, "label": label }),
+            )
+            .await
+    }
+
+    pub async fn close(
+        &self,
+        workspace_id: &str,
+    ) -> Result<WorkspaceCloseResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:workspace:close",
+                "workspace.close",
+                serde_json::json!({ "workspace_id": workspace_id }),
+            )
+            .await
+    }
+}
+
+impl RuntimeHandle {
+    pub fn workspace(&self) -> SocketWorkspaceClient<'_> {
+        SocketWorkspaceClient::new(self)
+    }
+}
+
+fn json_object() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
 }

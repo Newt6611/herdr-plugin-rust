@@ -13,7 +13,7 @@ use herdr_plugin::{
     event_source::{EnvEventSource, RuntimeEvent},
     events::{Event, EventKind, TabRenamed},
     App, Context, EventSourceOutput, HerdrEnv, OneShotRuntime, PluginInvocationContext, Runtime,
-    RuntimeApp, RuntimeError, RuntimeFuture,
+    RuntimeApp, RuntimeError, RuntimeFuture, SocketRuntime,
 };
 use serde::Deserialize;
 use tokio::sync::Mutex;
@@ -164,6 +164,87 @@ async fn explicit_one_shot_runtime_runs_event_from_env() {
     app.run().await.unwrap();
 
     assert_eq!(*seen.lock().await, ["Renamed"]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn socket_runtime_app_run_blocks_until_handle_stops_it() {
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::UnixListener,
+    };
+
+    let socket_path = std::env::temp_dir().join(format!(
+        "herdr-plugin-app-runtime-test-{}-{}.sock",
+        std::process::id(),
+        NEXT_FAKE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let _env = EnvGuard::set(&[("HERDR_SOCKET_PATH", socket_path.to_str().unwrap())]);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).await.unwrap();
+
+        let mut stream = reader.into_inner();
+        stream
+            .write_all(br#"{"id":"herdr-plugin:events","result":{"type":"subscription_started"}}"#)
+            .await
+            .unwrap();
+        stream.write_all(b"\n").await.unwrap();
+        std::future::pending::<()>().await;
+    });
+
+    let runtime = SocketRuntime::new();
+    let handle = runtime.handle();
+    let calls = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+    let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
+    let setup_tx = Arc::new(StdMutex::new(Some(setup_tx)));
+
+    let app = App::builder()
+        .runtime(runtime)
+        .build()
+        .unwrap()
+        .setup({
+            let calls = calls.clone();
+            let setup_tx = setup_tx.clone();
+            move |_ctx: Context| {
+                let calls = calls.clone();
+                let setup_tx = setup_tx.clone();
+                async move {
+                    calls.lock().await.push("setup");
+                    if let Some(setup_tx) = setup_tx.lock().unwrap().take() {
+                        let _ = setup_tx.send(());
+                    }
+                    Ok(())
+                }
+            }
+        })
+        .teardown({
+            let calls = calls.clone();
+            move |_ctx: Context| {
+                let calls = calls.clone();
+                async move {
+                    calls.lock().await.push("teardown");
+                    Ok(())
+                }
+            }
+        });
+
+    let run_task = tokio::spawn(app.run());
+    setup_rx.await.unwrap();
+
+    assert_eq!(*calls.lock().await, ["setup"]);
+
+    handle.stop().await.unwrap();
+    run_task.await.unwrap().unwrap();
+
+    assert_eq!(*calls.lock().await, ["setup", "teardown"]);
+
+    server.abort();
+    let _ = std::fs::remove_file(&socket_path);
 }
 
 struct RecordingRuntime {

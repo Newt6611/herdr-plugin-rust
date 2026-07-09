@@ -10,6 +10,7 @@ description = "Ergonomic Rust SDK surface for Herdr plugins."
 [workspace]
 members = [
     "examples/minimal",
+    "examples/socket-runtime",
 ]
 resolver = "2"
 
@@ -29,9 +30,10 @@ tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "sync"] }
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+interprocess = "2.4.2"
 thiserror.workspace = true
 toml.workspace = true
-tokio = { workspace = true, features = ["process"] }
+tokio = { workspace = true, features = ["io-util", "net", "process"] }
 
 [dev-dependencies]
 tokio.workspace = true

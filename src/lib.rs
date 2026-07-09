@@ -60,11 +60,12 @@ pub use pane::{
 pub use plugin::{PluginClient, PluginInstallOptions, PluginListOptions};
 pub use runtime::{
     OneShotRuntime, Runtime, RuntimeApp, RuntimeFuture, RuntimeHandle, RuntimeHandleError,
+    SocketRuntime,
 };
 use serde::de::DeserializeOwned;
 pub use session::SessionClient;
 pub use tab::{TabClient, TabCreateOptions, TabListOptions};
-pub use workspace::{WorkspaceClient, WorkspaceCreateOptions};
+pub use workspace::{SocketWorkspaceClient, WorkspaceClient, WorkspaceCreateOptions};
 pub use worktree::{
     WorktreeClient, WorktreeCreateOptions, WorktreeListOptions, WorktreeOpenOptions,
     WorktreeOpenTarget, WorktreeSource,
@@ -123,6 +124,24 @@ pub enum RuntimeError {
         #[source]
         source: ConfigError,
     },
+    #[error("HERDR_SOCKET_PATH is required for socket runtime")]
+    MissingSocketPath,
+    #[error("socket runtime is not supported on this platform")]
+    UnsupportedSocketRuntime,
+    #[error("failed to use Herdr socket at {path}")]
+    SocketIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("Herdr socket returned invalid JSON")]
+    InvalidSocketJson {
+        json: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("Herdr socket rejected event subscription: {message}")]
+    SocketSubscription { message: String },
 }
 
 /// Runtime application facade used to register and dispatch typed events.

@@ -16,15 +16,18 @@ Currently included:
 
 - typed runtime event handlers
 - runtime strategy abstraction for plugin lifecycle execution
+- blocking socket runtime handle for long-running plugin loops
 - workspace, tab, and pane event types
 - typed config loading from `HERDR_PLUGIN_CONFIG_DIR`
 - runtime state through `Context`
 - a CLI-backed `HerdrClient`
 - resource clients for sessions, workspaces, worktrees, tabs, panes, and agents
 
-Current Herdr integration is CLI-only: `HerdrClient` shells out to the local
-`herdr` binary, using `HERDR_BIN_PATH` when Herdr provides it. Direct socket
-integration through `HERDR_SOCKET_PATH` is planned for a future release.
+`HerdrClient` shells out to the local `herdr` binary, using `HERDR_BIN_PATH`
+when Herdr provides it. `SocketRuntime` uses `HERDR_SOCKET_PATH` to subscribe
+to Herdr lifecycle events and run a long-lived command loop. `SocketRuntime`
+is still in testing; prefer `OneShotRuntime` for stable plugin event hooks until
+the socket runtime API settles.
 
 ## Install
 
@@ -124,6 +127,28 @@ let app = App::builder()
     .build()?;
 ```
 
+`SocketRuntime` is for long-running plugin processes. `App::run().await`
+blocks while the runtime loop is alive. Clone the handle before moving the
+runtime into the app, then send a stop command when the loop should exit:
+
+```rust
+use herdr_plugin::{App, EventKind, SocketRuntime};
+
+let runtime = SocketRuntime::new()
+    .subscribe([EventKind::TabRenamed, EventKind::PaneFocused]);
+let handle = runtime.handle();
+
+let app = App::builder()
+    .runtime(runtime)
+    .build()?;
+
+tokio::spawn(async move {
+    handle.stop().await
+});
+
+app.run().await?;
+```
+
 The builder keeps runtime overrides until the runtime initializes the app:
 
 ```rust
@@ -192,7 +217,8 @@ let tabs = client.tab().list(Default::default()).await?;
 src/           published SDK crate
 tests/         integration tests
 examples/
-  minimal/     minimal runtime example
+  minimal/          one-shot runtime example
+  socket-runtime/   long-running socket runtime example
 ```
 
 ## Development

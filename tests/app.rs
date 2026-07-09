@@ -166,6 +166,127 @@ async fn explicit_one_shot_runtime_runs_event_from_env() {
     assert_eq!(*seen.lock().await, ["Renamed"]);
 }
 
+#[tokio::test]
+async fn one_shot_runtime_context_has_no_socket_handle() {
+    let _env = EnvGuard::set(&[]);
+    let captured = Arc::new(Mutex::new(false));
+    let app = App::builder().build().unwrap().setup({
+        let captured = captured.clone();
+        move |ctx: Context| {
+            let captured = captured.clone();
+            async move {
+                *captured.lock().await = ctx.socket().is_none();
+                Ok(())
+            }
+        }
+    });
+
+    app.run().await.unwrap();
+
+    assert!(*captured.lock().await);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn socket_runtime_context_exposes_socket_handle_in_event_callbacks() {
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::UnixListener,
+    };
+
+    let socket_path = std::env::temp_dir().join(format!(
+        "herdr-plugin-context-socket-test-{}-{}.sock",
+        std::process::id(),
+        NEXT_FAKE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    let _env = EnvGuard::set(&[("HERDR_SOCKET_PATH", socket_path.to_str().unwrap())]);
+
+    let server = tokio::spawn(async move {
+        let (subscription, _) = listener.accept().await.unwrap();
+        let mut subscription_reader = BufReader::new(subscription);
+        let mut subscribe_request = String::new();
+        subscription_reader
+            .read_line(&mut subscribe_request)
+            .await
+            .unwrap();
+        let mut subscription = subscription_reader.into_inner();
+        subscription
+            .write_all(br#"{"id":"herdr-plugin:events","result":{"type":"subscription_started"}}"#)
+            .await
+            .unwrap();
+        subscription.write_all(b"\n").await.unwrap();
+        subscription
+            .write_all(
+                br#"{"event":"tab_renamed","data":{"type":"tab_renamed","tab_id":"w1:t1","workspace_id":"w1","label":"renamed"}}"#,
+            )
+            .await
+            .unwrap();
+        subscription.write_all(b"\n").await.unwrap();
+
+        let (command, _) = listener.accept().await.unwrap();
+        let mut command_reader = BufReader::new(command);
+        let mut command_request = String::new();
+        command_reader
+            .read_line(&mut command_request)
+            .await
+            .unwrap();
+        let command_request: serde_json::Value = serde_json::from_str(&command_request).unwrap();
+        assert_eq!(command_request["method"], "workspace.create");
+
+        let mut command = command_reader.into_inner();
+        command
+            .write_all(br#"{"id":"herdr-plugin:workspace:create","result":{"root_pane":{"agent_status":"unknown","cwd":"/tmp","focused":false,"foreground_cwd":"/tmp","pane_id":"wW:p1","revision":0,"tab_id":"wW:t1","terminal_id":"term_1","workspace_id":"wW"},"tab":{"agent_status":"unknown","focused":false,"label":"1","number":1,"pane_count":1,"tab_id":"wW:t1","workspace_id":"wW"},"type":"workspace_created","workspace":{"active_tab_id":"wW:t1","agent_status":"unknown","focused":false,"label":"from-context","number":5,"pane_count":1,"tab_count":1,"workspace_id":"wW"}}}"#)
+            .await
+            .unwrap();
+        command.write_all(b"\n").await.unwrap();
+        std::future::pending::<()>().await;
+    });
+
+    let runtime = SocketRuntime::new().subscribe([EventKind::TabRenamed]);
+    let handle = runtime.handle();
+    let created_workspace = Arc::new(Mutex::new(None));
+    let app = App::builder()
+        .runtime(runtime)
+        .build()
+        .unwrap()
+        .on_event::<TabRenamed>({
+            let created_workspace = created_workspace.clone();
+            move |ctx: Context, _event: TabRenamed| {
+                let created_workspace = created_workspace.clone();
+                async move {
+                    let created = ctx
+                        .socket()
+                        .unwrap()
+                        .workspace()
+                        .create(herdr_plugin::WorkspaceCreateOptions {
+                            cwd: None,
+                            label: Some("from-context".to_owned()),
+                            env: Vec::new(),
+                            focus: Some(false),
+                        })
+                        .await
+                        .unwrap();
+                    *created_workspace.lock().await = Some(created.workspace.workspace_id);
+                }
+            }
+        });
+
+    let run_task = tokio::spawn(app.run());
+    while created_workspace.lock().await.is_none() {
+        tokio::task::yield_now().await;
+    }
+
+    handle.stop().await.unwrap();
+    run_task.await.unwrap().unwrap();
+
+    assert_eq!(*created_workspace.lock().await, Some("wW".to_owned()));
+
+    server.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn socket_runtime_app_run_blocks_until_handle_stops_it() {

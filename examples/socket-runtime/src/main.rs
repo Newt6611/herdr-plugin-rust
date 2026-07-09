@@ -1,5 +1,5 @@
 use herdr_plugin::{
-    App, Context, EventKind, PaneFocused, SocketRuntime, TabRenamed, WorkspaceCreateOptions,
+    App, Context, EventKind, PaneFocused, RuntimeHandleError, SocketRuntime, TabRenamed,
 };
 use serde::Deserialize;
 
@@ -24,6 +24,10 @@ async fn setup(ctx: Context<PluginState, PluginConfig>) -> herdr_plugin::SetupRe
 async fn tab_renamed(ctx: Context<PluginState, PluginConfig>, event: TabRenamed) {
     ctx.log()
         .info(format!("tab renamed: {} -> {}", event.tab_id, event.label));
+
+    if let Some(socket) = ctx.socket() {
+        let _ = socket.tab().focus(&event.tab_id).await;
+    }
 }
 
 async fn pane_focused(ctx: Context<PluginState, PluginConfig>, event: PaneFocused) {
@@ -35,32 +39,7 @@ async fn main() -> Result<(), herdr_plugin::RuntimeError> {
     let runtime = SocketRuntime::new().subscribe([EventKind::TabRenamed, EventKind::PaneFocused]);
     let handle = runtime.handle();
 
-    tokio::spawn(async move {
-        if std::env::var_os("HERDR_SOCKET_EXAMPLE_CREATE_WORKSPACE").is_none() {
-            return;
-        }
-
-        let result = handle
-            .workspace()
-            .create(WorkspaceCreateOptions {
-                cwd: None,
-                label: Some("socket-runtime-example".to_owned()),
-                env: Vec::new(),
-                focus: Some(false),
-            })
-            .await;
-
-        match result {
-            Ok(created) => {
-                eprintln!("created workspace {}", created.workspace.workspace_id);
-            }
-            Err(error) => {
-                eprintln!("workspace create failed: {error}");
-            }
-        }
-    });
-
-    App::builder()
+    let app = App::builder()
         .runtime(runtime)
         .with_state(PluginState {
             label: "socket-runtime".to_owned(),
@@ -78,6 +57,25 @@ async fn main() -> Result<(), herdr_plugin::RuntimeError> {
             ctx.log().info("socket runtime stopped");
             Ok(())
         })
-        .run()
-        .await
+        .run();
+
+    let app_task = tokio::spawn(app);
+
+    while let Err(RuntimeHandleError::SocketUnavailable) = handle.server().ping().await {
+        tokio::task::yield_now().await;
+    }
+
+    let _created = handle
+        .workspace()
+        .create(herdr_plugin::WorkspaceCreateOptions {
+            cwd: None,
+            label: Some("socket-runtime-handle-example".to_owned()),
+            env: Vec::new(),
+            focus: Some(false),
+        })
+        .await;
+
+    handle.stop().await.expect("failed to stop socket runtime");
+
+    app_task.await.expect("socket runtime task panicked")
 }

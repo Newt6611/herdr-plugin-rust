@@ -3,6 +3,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::Path,
     pin::Pin,
+    sync::{Arc as StdArc, Mutex as StdMutex},
 };
 
 use tokio::sync::{mpsc, oneshot};
@@ -121,6 +122,7 @@ where
         Box::pin(async move {
             let output = EnvEventSource::from_env()?;
             app.initialize(output)?;
+            app.set_socket_handle(self.handle.clone());
 
             if let Err(source) = app.run_setup().await {
                 return app.return_error(RuntimeError::Setup { source }).await;
@@ -132,6 +134,7 @@ where
                 .socket_path
                 .clone()
                 .ok_or(RuntimeError::MissingSocketPath)?;
+            self.handle.set_socket_path(socket_path.clone());
             let mut event_stream =
                 SocketEventStream::connect(&socket_path, self.subscriptions.clone()).await?;
 
@@ -140,12 +143,6 @@ where
                     command = self.command_rx.recv() => {
                         match command {
                             Some(RuntimeCommand::Stop) | None => break,
-                            Some(RuntimeCommand::Request { request, respond_to }) => {
-                                let result = send_socket_request_inner(&socket_path, request)
-                                    .await
-                                    .map_err(RuntimeHandleError::CommandFailed);
-                                let _ = respond_to.send(result);
-                            }
                         }
                     }
                     event = event_stream.next_event() => {
@@ -489,6 +486,14 @@ where
             .clone()
     }
 
+    pub fn set_socket_handle(&mut self, handle: RuntimeHandle) {
+        let context = self
+            .context
+            .take()
+            .expect("runtime app has not been initialized");
+        self.context = Some(context.with_socket(handle));
+    }
+
     pub async fn run_setup(&self) -> Result<(), SetupError> {
         let context = self.context();
         for handler in &self.setup_handlers {
@@ -554,24 +559,31 @@ impl<State, Config> RuntimeApp<State, Config> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum RuntimeCommand {
     Stop,
-    Request {
-        request: serde_json::Value,
-        respond_to: oneshot::Sender<Result<serde_json::Value, RuntimeHandleError>>,
-    },
 }
 
 #[derive(Clone, Debug)]
 pub struct RuntimeHandle {
     command_tx: mpsc::Sender<RuntimeCommand>,
+    socket_path: StdArc<StdMutex<Option<PathBuf>>>,
 }
 
 impl RuntimeHandle {
     #[allow(dead_code)]
     pub(crate) fn new(command_tx: mpsc::Sender<RuntimeCommand>) -> Self {
-        Self { command_tx }
+        Self {
+            command_tx,
+            socket_path: StdArc::new(StdMutex::new(None)),
+        }
+    }
+
+    pub(crate) fn set_socket_path(&self, socket_path: PathBuf) {
+        *self
+            .socket_path
+            .lock()
+            .expect("runtime handle socket path mutex poisoned") = Some(socket_path);
     }
 
     pub async fn stop(&self) -> Result<(), RuntimeHandleError> {
@@ -585,17 +597,15 @@ impl RuntimeHandle {
         &self,
         request: serde_json::Value,
     ) -> Result<serde_json::Value, RuntimeHandleError> {
-        let (respond_to, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(RuntimeCommand::Request {
-                request,
-                respond_to,
-            })
+        let socket_path = self
+            .socket_path
+            .lock()
+            .expect("runtime handle socket path mutex poisoned")
+            .clone()
+            .ok_or(RuntimeHandleError::SocketUnavailable)?;
+        send_socket_request_inner(&socket_path, request)
             .await
-            .map_err(|_| RuntimeHandleError::RuntimeStopped)?;
-        response_rx
-            .await
-            .map_err(|_| RuntimeHandleError::RuntimeStopped)?
+            .map_err(RuntimeHandleError::CommandFailed)
     }
 
     pub(crate) async fn request_json_result<T>(
@@ -622,6 +632,8 @@ impl RuntimeHandle {
 pub enum RuntimeHandleError {
     #[error("runtime is no longer accepting commands")]
     RuntimeStopped,
+    #[error("socket runtime has not initialized a socket path")]
+    SocketUnavailable,
     #[error("Herdr command failed")]
     CommandFailed(#[source] RuntimeError),
     #[error("{0}")]
@@ -1159,5 +1171,328 @@ mod tests {
             Some(value) => std::env::set_var("HERDR_SOCKET_PATH", value),
             None => std::env::remove_var("HERDR_SOCKET_PATH"),
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn socket_runtime_handle_exposes_protocol_method_groups() {
+        let _env_lock = SOCKET_ENV_LOCK.lock().await;
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+            net::UnixListener,
+        };
+
+        let socket_path = std::env::temp_dir().join(format!(
+            "herdr-plugin-runtime-all-methods-test-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path).unwrap();
+
+        let expected = vec![
+            ("ping", serde_json::json!({})),
+            ("server.stop", serde_json::json!({})),
+            ("server.reload_config", serde_json::json!({})),
+            ("server.agent_manifests", serde_json::json!({})),
+            ("server.reload_agent_manifests", serde_json::json!({})),
+            (
+                "server.live_handoff",
+                serde_json::json!({"expected_protocol":1,"expected_version":"test"}),
+            ),
+            (
+                "notification.show",
+                serde_json::json!({"title":"done","body":"ok","sound":"done"}),
+            ),
+            (
+                "client.window_title.set",
+                serde_json::json!({"title":"Herdr"}),
+            ),
+            ("client.window_title.clear", serde_json::json!({})),
+            ("session.snapshot", serde_json::json!({})),
+            (
+                "workspace.move",
+                serde_json::json!({"workspace_id":"w1","insert_index":2}),
+            ),
+            (
+                "tab.move",
+                serde_json::json!({"tab_id":"w1:t1","insert_index":3}),
+            ),
+            (
+                "agent.send",
+                serde_json::json!({"target":"w1:p1","text":"hello"}),
+            ),
+            (
+                "pane.send_text",
+                serde_json::json!({"pane_id":"w1:p1","text":"hello"}),
+            ),
+            (
+                "pane.send_keys",
+                serde_json::json!({"pane_id":"w1:p1","keys":["enter"]}),
+            ),
+            (
+                "pane.send_input",
+                serde_json::json!({"pane_id":"w1:p1","text":"hi","keys":["enter"]}),
+            ),
+            (
+                "pane.report_agent",
+                serde_json::json!({"pane_id":"w1:p1","source":"test","agent":"bot","state":"working"}),
+            ),
+            (
+                "pane.report_agent_session",
+                serde_json::json!({"pane_id":"w1:p1","source":"test","agent":"bot","agent_session_id":"s1"}),
+            ),
+            (
+                "pane.report_metadata",
+                serde_json::json!({"pane_id":"w1:p1","source":"test","title":"work"}),
+            ),
+            (
+                "pane.clear_agent_authority",
+                serde_json::json!({"pane_id":"w1:p1","source":"test","seq":1}),
+            ),
+            (
+                "pane.release_agent",
+                serde_json::json!({"pane_id":"w1:p1","source":"test","agent":"bot","seq":1}),
+            ),
+            (
+                "pane.wait_for_output",
+                serde_json::json!({"pane_id":"w1:p1","pattern":"ready"}),
+            ),
+            ("layout.export", serde_json::json!({"tab_id":"w1:t1"})),
+            (
+                "layout.apply",
+                serde_json::json!({"focus":false,"root":{"type":"pane"}}),
+            ),
+            (
+                "layout.set_split_ratio",
+                serde_json::json!({"path":[true,false],"ratio":0.6}),
+            ),
+            (
+                "events.subscribe",
+                serde_json::json!({"subscriptions":[{"type":"tab.focused"}]}),
+            ),
+            (
+                "events.wait",
+                serde_json::json!({"match_event":{"event":"tab_focused","tab_id":"w1:t1"}}),
+            ),
+            ("integration.install", serde_json::json!({"target":"codex"})),
+            (
+                "integration.uninstall",
+                serde_json::json!({"target":"codex"}),
+            ),
+            (
+                "plugin.link",
+                serde_json::json!({"path":"/plugin","enabled":true}),
+            ),
+            (
+                "plugin.unlink",
+                serde_json::json!({"plugin_id":"example.tool"}),
+            ),
+            (
+                "plugin.action.list",
+                serde_json::json!({"plugin_id":"example.tool"}),
+            ),
+            (
+                "plugin.action.invoke",
+                serde_json::json!({"action_id":"example.tool.run","context":{"invocation_source":"test"}}),
+            ),
+            (
+                "plugin.log.list",
+                serde_json::json!({"plugin_id":"example.tool","limit":5}),
+            ),
+        ];
+
+        let server_expected = expected.clone();
+        let server = tokio::spawn(async move {
+            for (index, (method, params)) in server_expected.into_iter().enumerate() {
+                let (command, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(command);
+                let mut request = String::new();
+                reader.read_line(&mut request).await.unwrap();
+                let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+                assert_eq!(request["method"], method);
+                assert_eq!(request["params"], params);
+
+                let mut command = reader.into_inner();
+                command
+                    .write_all(
+                        format!(
+                            r#"{{"id":"response-{index}","result":{{"type":"ok","index":{index}}}}}"#
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                command.write_all(b"\n").await.unwrap();
+            }
+        });
+
+        let (handle, _rx) = runtime_command_channel(1);
+        handle.set_socket_path(socket_path.clone());
+
+        handle.server().ping().await.unwrap();
+        handle.server().stop().await.unwrap();
+        handle.server().reload_config().await.unwrap();
+        handle.server().agent_manifests().await.unwrap();
+        handle.server().reload_agent_manifests().await.unwrap();
+        handle
+            .server()
+            .live_handoff(crate::ServerLiveHandoffOptions {
+                import_exe: None,
+                expected_protocol: Some(1),
+                expected_version: Some("test".to_owned()),
+            })
+            .await
+            .unwrap();
+        handle
+            .notification()
+            .show(crate::NotificationShowOptions {
+                title: "done".to_owned(),
+                body: Some("ok".to_owned()),
+                position: None,
+                sound: Some(crate::NotificationSound::Done),
+            })
+            .await
+            .unwrap();
+        handle.client().set_window_title("Herdr").await.unwrap();
+        handle.client().clear_window_title().await.unwrap();
+        handle.session().snapshot().await.unwrap();
+        handle.workspace().move_workspace("w1", 2).await.unwrap();
+        handle.tab().move_tab("w1:t1", 3).await.unwrap();
+        handle.agent().send("w1:p1", "hello").await.unwrap();
+        handle.pane().send_text("w1:p1", "hello").await.unwrap();
+        handle
+            .pane()
+            .send_keys("w1:p1", vec!["enter".to_owned()])
+            .await
+            .unwrap();
+        handle
+            .pane()
+            .send_input("w1:p1", "hi", vec!["enter".to_owned()])
+            .await
+            .unwrap();
+        handle
+            .pane()
+            .report_agent(
+                serde_json::json!({"pane_id":"w1:p1","source":"test","agent":"bot","state":"working"}),
+            )
+            .await
+            .unwrap();
+        handle
+            .pane()
+            .report_agent_session(
+                serde_json::json!({"pane_id":"w1:p1","source":"test","agent":"bot","agent_session_id":"s1"}),
+            )
+            .await
+            .unwrap();
+        handle
+            .pane()
+            .report_metadata(serde_json::json!({"pane_id":"w1:p1","source":"test","title":"work"}))
+            .await
+            .unwrap();
+        handle
+            .pane()
+            .clear_agent_authority("w1:p1", Some("test"), Some(1))
+            .await
+            .unwrap();
+        handle
+            .pane()
+            .release_agent("w1:p1", "test", "bot", Some(1))
+            .await
+            .unwrap();
+        handle
+            .pane()
+            .wait_for_output(serde_json::json!({"pane_id":"w1:p1","pattern":"ready"}))
+            .await
+            .unwrap();
+        handle
+            .layout()
+            .export(crate::LayoutExportOptions {
+                tab_id: Some("w1:t1".to_owned()),
+                pane_id: None,
+            })
+            .await
+            .unwrap();
+        handle
+            .layout()
+            .apply(crate::LayoutApplyOptions {
+                workspace_id: None,
+                tab_id: None,
+                tab_label: None,
+                focus: false,
+                root: serde_json::json!({"type":"pane"}),
+            })
+            .await
+            .unwrap();
+        handle
+            .layout()
+            .set_split_ratio(crate::LayoutSetSplitRatioOptions {
+                tab_id: None,
+                pane_id: None,
+                path: vec![true, false],
+                ratio: 0.6,
+            })
+            .await
+            .unwrap();
+        handle
+            .events()
+            .subscribe(serde_json::json!({"subscriptions":[{"type":"tab.focused"}]}))
+            .await
+            .unwrap();
+        handle
+            .events()
+            .wait(serde_json::json!({"match_event":{"event":"tab_focused","tab_id":"w1:t1"}}))
+            .await
+            .unwrap();
+        handle
+            .integration()
+            .install(crate::IntegrationTarget {
+                target: "codex".to_owned(),
+            })
+            .await
+            .unwrap();
+        handle
+            .integration()
+            .uninstall(crate::IntegrationTarget {
+                target: "codex".to_owned(),
+            })
+            .await
+            .unwrap();
+        handle
+            .plugin()
+            .link(crate::PluginLinkOptions {
+                path: "/plugin".to_owned(),
+                enabled: true,
+                source: None,
+            })
+            .await
+            .unwrap();
+        handle.plugin().unlink("example.tool").await.unwrap();
+        handle
+            .plugin()
+            .action_list(crate::PluginActionListOptions {
+                plugin_id: Some("example.tool".to_owned()),
+            })
+            .await
+            .unwrap();
+        handle
+            .plugin()
+            .action_invoke(crate::PluginActionInvokeOptions {
+                action_id: "example.tool.run".to_owned(),
+                plugin_id: None,
+                context: Some(serde_json::json!({"invocation_source":"test"})),
+            })
+            .await
+            .unwrap();
+        handle
+            .plugin()
+            .log_list(crate::PluginLogListOptions {
+                plugin_id: Some("example.tool".to_owned()),
+                limit: Some(5),
+            })
+            .await
+            .unwrap();
+
+        server.await.unwrap();
+        let _ = std::fs::remove_file(&socket_path);
     }
 }

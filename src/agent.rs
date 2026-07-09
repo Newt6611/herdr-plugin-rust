@@ -7,6 +7,8 @@ use crate::{
     error::HerdrError,
     models::{AgentInfoResponse, AgentList, AgentReadResponse},
     pane::Direction,
+    socket::{env_object, insert_opt, insert_opt_bool, insert_opt_path},
+    RuntimeHandle, RuntimeHandleError,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -230,8 +232,165 @@ impl<'a> AgentClient<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SocketAgentClient<'a> {
+    handle: &'a RuntimeHandle,
+}
+
+impl<'a> SocketAgentClient<'a> {
+    pub(crate) fn new(handle: &'a RuntimeHandle) -> Self {
+        Self { handle }
+    }
+
+    pub async fn list(&self) -> Result<AgentList, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:agent:list",
+                "agent.list",
+                crate::socket::empty_params(),
+            )
+            .await
+    }
+
+    pub async fn get(&self, target: &str) -> Result<AgentInfoResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:agent:get",
+                "agent.get",
+                serde_json::json!({ "target": target }),
+            )
+            .await
+    }
+
+    pub async fn read(
+        &self,
+        target: &str,
+        options: AgentReadOptions,
+    ) -> Result<AgentReadResponse, RuntimeHandleError> {
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "target".to_owned(),
+            serde_json::Value::String(target.to_owned()),
+        );
+        if let Some(source) = options.source {
+            params.insert(
+                "source".to_owned(),
+                serde_json::Value::String(source.as_str().to_owned()),
+            );
+        }
+        if let Some(lines) = options.lines {
+            params.insert("lines".to_owned(), serde_json::Value::Number(lines.into()));
+        }
+        if let Some(format) = options.format {
+            params.insert(
+                "format".to_owned(),
+                serde_json::Value::String(format.as_str().to_owned()),
+            );
+        }
+        params.insert(
+            "strip_ansi".to_owned(),
+            serde_json::Value::Bool(!options.ansi),
+        );
+        self.handle
+            .request_json_result(
+                "herdr-plugin:agent:read",
+                "agent.read",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn explain(&self, target: &str) -> Result<Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:agent:explain",
+                "agent.explain",
+                serde_json::json!({ "target": target }),
+            )
+            .await
+    }
+
+    pub async fn send(&self, target: &str, text: &str) -> Result<Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:agent:send",
+                "agent.send",
+                serde_json::json!({ "target": target, "text": text }),
+            )
+            .await
+    }
+
+    pub async fn rename(
+        &self,
+        target: &str,
+        name: Option<&str>,
+    ) -> Result<AgentInfoResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:agent:rename",
+                "agent.rename",
+                serde_json::json!({ "target": target, "name": name }),
+            )
+            .await
+    }
+
+    pub async fn focus(&self, target: &str) -> Result<AgentInfoResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:agent:focus",
+                "agent.focus",
+                serde_json::json!({ "target": target }),
+            )
+            .await
+    }
+
+    pub async fn start(
+        &self,
+        options: AgentStartOptions,
+    ) -> Result<AgentInfoResponse, RuntimeHandleError> {
+        let mut params = serde_json::Map::new();
+        params.insert("name".to_owned(), serde_json::Value::String(options.name));
+        insert_opt_path(&mut params, "cwd", options.cwd);
+        insert_opt(&mut params, "workspace_id", options.workspace_id);
+        insert_opt(&mut params, "tab_id", options.tab_id);
+        if let Some(split) = options.split {
+            params.insert(
+                "split".to_owned(),
+                serde_json::Value::String(split.as_str().to_owned()),
+            );
+        }
+        insert_opt_bool(&mut params, "focus", options.focus);
+        params.insert(
+            "argv".to_owned(),
+            serde_json::Value::Array(
+                options
+                    .argv
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+        if !options.env.is_empty() {
+            params.insert("env".to_owned(), env_object(options.env));
+        }
+        self.handle
+            .request_json_result(
+                "herdr-plugin:agent:start",
+                "agent.start",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+}
+
+impl RuntimeHandle {
+    pub fn agent(&self) -> SocketAgentClient<'_> {
+        SocketAgentClient::new(self)
+    }
+}
+
 impl AgentReadSource {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Visible => "visible",
             Self::Recent => "recent",
@@ -242,7 +401,7 @@ impl AgentReadSource {
 }
 
 impl ReadFormat {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Text => "text",
             Self::Ansi => "ansi",
@@ -251,7 +410,7 @@ impl ReadFormat {
 }
 
 impl AgentWaitStatus {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Idle => "idle",
             Self::Working => "working",

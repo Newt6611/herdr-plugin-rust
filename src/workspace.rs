@@ -201,6 +201,20 @@ impl<'a> SocketWorkspaceClient<'a> {
             )
             .await
     }
+
+    pub async fn move_workspace(
+        &self,
+        workspace_id: &str,
+        insert_index: usize,
+    ) -> Result<serde_json::Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:workspace:move",
+                "workspace.move",
+                serde_json::json!({ "workspace_id": workspace_id, "insert_index": insert_index }),
+            )
+            .await
+    }
 }
 
 impl RuntimeHandle {

@@ -8,6 +8,8 @@ use crate::{
         PaneInfoResponse, PaneLayoutResponse, PaneList, PaneProcessInfoResponse,
         PluginPaneCloseResponse, PluginPaneFocusResponse, PluginPaneOpenResponse,
     },
+    socket::{env_object, insert_opt, insert_opt_bool, insert_opt_path, number},
+    RuntimeHandle, RuntimeHandleError,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -447,6 +449,536 @@ impl<'a> PaneClient<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SocketPaneClient<'a> {
+    handle: &'a RuntimeHandle,
+}
+
+impl<'a> SocketPaneClient<'a> {
+    pub(crate) fn new(handle: &'a RuntimeHandle) -> Self {
+        Self { handle }
+    }
+
+    pub async fn list(&self, options: PaneListOptions) -> Result<PaneList, RuntimeHandleError> {
+        let mut params = serde_json::Map::new();
+        insert_opt(&mut params, "workspace_id", options.workspace_id);
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:list",
+                "pane.list",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn current(
+        &self,
+        pane: PaneSelector,
+    ) -> Result<PaneCurrentResponse, RuntimeHandleError> {
+        let mut params = serde_json::Map::new();
+        if let PaneSelector::Pane(pane_id) = pane {
+            params.insert(
+                "caller_pane_id".to_owned(),
+                serde_json::Value::String(pane_id),
+            );
+        }
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:current",
+                "pane.current",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn get(&self, pane_id: &str) -> Result<PaneInfoResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:get",
+                "pane.get",
+                serde_json::json!({ "pane_id": pane_id }),
+            )
+            .await
+    }
+
+    pub async fn focus_pane(&self, pane_id: &str) -> Result<PaneInfoResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:focus",
+                "pane.focus",
+                serde_json::json!({ "pane_id": pane_id }),
+            )
+            .await
+    }
+
+    pub async fn layout(
+        &self,
+        pane: PaneSelector,
+    ) -> Result<PaneLayoutResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:layout",
+                "pane.layout",
+                pane_id_params(pane),
+            )
+            .await
+    }
+
+    pub async fn process_info(
+        &self,
+        pane: PaneSelector,
+    ) -> Result<PaneProcessInfoResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:process_info",
+                "pane.process_info",
+                pane_id_params(pane),
+            )
+            .await
+    }
+
+    pub async fn neighbor(
+        &self,
+        direction: Direction,
+        pane: PaneSelector,
+    ) -> Result<PaneActionResponse, RuntimeHandleError> {
+        let mut params = pane_id_map(pane);
+        params.insert(
+            "direction".to_owned(),
+            serde_json::Value::String(direction.as_str().to_owned()),
+        );
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:neighbor",
+                "pane.neighbor",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn edges(&self, pane: PaneSelector) -> Result<PaneEdgesResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:edges",
+                "pane.edges",
+                pane_id_params(pane),
+            )
+            .await
+    }
+
+    pub async fn focus(
+        &self,
+        direction: Direction,
+        pane: PaneSelector,
+    ) -> Result<PaneActionResponse, RuntimeHandleError> {
+        let mut params = pane_id_map(pane);
+        params.insert(
+            "direction".to_owned(),
+            serde_json::Value::String(direction.as_str().to_owned()),
+        );
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:focus_direction",
+                "pane.focus_direction",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn resize(
+        &self,
+        direction: Direction,
+        amount: Option<f64>,
+        pane: PaneSelector,
+    ) -> Result<PaneActionResponse, RuntimeHandleError> {
+        let mut params = pane_id_map(pane);
+        params.insert(
+            "direction".to_owned(),
+            serde_json::Value::String(direction.as_str().to_owned()),
+        );
+        if let Some(amount) = amount {
+            params.insert("amount".to_owned(), number(amount));
+        }
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:resize",
+                "pane.resize",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn zoom(
+        &self,
+        pane: PaneSelector,
+        mode: PaneZoomMode,
+    ) -> Result<PaneActionResponse, RuntimeHandleError> {
+        let mut params = pane_id_map(pane);
+        params.insert(
+            "mode".to_owned(),
+            serde_json::Value::String(mode.as_str().to_owned()),
+        );
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:zoom",
+                "pane.zoom",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn rename(
+        &self,
+        pane_id: &str,
+        label: Option<&str>,
+    ) -> Result<PaneInfoResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:rename",
+                "pane.rename",
+                serde_json::json!({ "pane_id": pane_id, "label": label }),
+            )
+            .await
+    }
+
+    pub async fn split(
+        &self,
+        options: PaneSplitOptions,
+    ) -> Result<PaneInfoResponse, RuntimeHandleError> {
+        let mut params = serde_json::Map::new();
+        if let PaneSelector::Pane(pane_id) = options.pane {
+            params.insert(
+                "target_pane_id".to_owned(),
+                serde_json::Value::String(pane_id),
+            );
+        }
+        params.insert(
+            "direction".to_owned(),
+            serde_json::Value::String(options.direction.as_str().to_owned()),
+        );
+        if let Some(ratio) = options.ratio {
+            params.insert("ratio".to_owned(), number(ratio));
+        }
+        insert_opt_path(&mut params, "cwd", options.cwd);
+        if !options.env.is_empty() {
+            params.insert("env".to_owned(), env_object(options.env));
+        }
+        insert_opt_bool(&mut params, "focus", options.focus);
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:split",
+                "pane.split",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn swap_direction(
+        &self,
+        direction: Direction,
+        pane: PaneSelector,
+    ) -> Result<PaneActionResponse, RuntimeHandleError> {
+        let mut params = pane_id_map(pane);
+        params.insert(
+            "direction".to_owned(),
+            serde_json::Value::String(direction.as_str().to_owned()),
+        );
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:swap",
+                "pane.swap",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn swap_panes(
+        &self,
+        source_pane_id: &str,
+        target_pane_id: &str,
+    ) -> Result<PaneActionResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:swap",
+                "pane.swap",
+                serde_json::json!({
+                    "source_pane_id": source_pane_id,
+                    "target_pane_id": target_pane_id
+                }),
+            )
+            .await
+    }
+
+    pub async fn move_pane(
+        &self,
+        options: PaneMoveOptions,
+    ) -> Result<PaneActionResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:move",
+                "pane.move",
+                serde_json::json!({
+                    "pane_id": options.pane_id,
+                    "destination": socket_move_destination(options.destination),
+                    "focus": options.focus.unwrap_or(false)
+                }),
+            )
+            .await
+    }
+
+    pub async fn send_text(
+        &self,
+        pane_id: &str,
+        text: &str,
+    ) -> Result<serde_json::Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:send_text",
+                "pane.send_text",
+                serde_json::json!({ "pane_id": pane_id, "text": text }),
+            )
+            .await
+    }
+
+    pub async fn send_keys(
+        &self,
+        pane_id: &str,
+        keys: Vec<String>,
+    ) -> Result<serde_json::Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:send_keys",
+                "pane.send_keys",
+                serde_json::json!({ "pane_id": pane_id, "keys": keys }),
+            )
+            .await
+    }
+
+    pub async fn send_input(
+        &self,
+        pane_id: &str,
+        text: impl Into<String>,
+        keys: Vec<String>,
+    ) -> Result<serde_json::Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:send_input",
+                "pane.send_input",
+                serde_json::json!({ "pane_id": pane_id, "text": text.into(), "keys": keys }),
+            )
+            .await
+    }
+
+    pub async fn read(
+        &self,
+        pane_id: &str,
+        options: crate::AgentReadOptions,
+    ) -> Result<crate::AgentReadResponse, RuntimeHandleError> {
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "pane_id".to_owned(),
+            serde_json::Value::String(pane_id.to_owned()),
+        );
+        if let Some(source) = options.source {
+            params.insert(
+                "source".to_owned(),
+                serde_json::Value::String(source.as_str().to_owned()),
+            );
+        }
+        if let Some(lines) = options.lines {
+            params.insert("lines".to_owned(), serde_json::Value::Number(lines.into()));
+        }
+        if let Some(format) = options.format {
+            params.insert(
+                "format".to_owned(),
+                serde_json::Value::String(format.as_str().to_owned()),
+            );
+        }
+        params.insert(
+            "strip_ansi".to_owned(),
+            serde_json::Value::Bool(!options.ansi),
+        );
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:read",
+                "pane.read",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn report_agent(
+        &self,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:report_agent",
+                "pane.report_agent",
+                params,
+            )
+            .await
+    }
+
+    pub async fn report_agent_session(
+        &self,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:report_agent_session",
+                "pane.report_agent_session",
+                params,
+            )
+            .await
+    }
+
+    pub async fn report_metadata(
+        &self,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:report_metadata",
+                "pane.report_metadata",
+                params,
+            )
+            .await
+    }
+
+    pub async fn clear_agent_authority(
+        &self,
+        pane_id: &str,
+        source: Option<&str>,
+        seq: Option<u64>,
+    ) -> Result<serde_json::Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:clear_agent_authority",
+                "pane.clear_agent_authority",
+                serde_json::json!({ "pane_id": pane_id, "source": source, "seq": seq }),
+            )
+            .await
+    }
+
+    pub async fn release_agent(
+        &self,
+        pane_id: &str,
+        source: &str,
+        agent: &str,
+        seq: Option<u64>,
+    ) -> Result<serde_json::Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:release_agent",
+                "pane.release_agent",
+                serde_json::json!({
+                    "pane_id": pane_id,
+                    "source": source,
+                    "agent": agent,
+                    "seq": seq
+                }),
+            )
+            .await
+    }
+
+    pub async fn wait_for_output(
+        &self,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:wait_for_output",
+                "pane.wait_for_output",
+                params,
+            )
+            .await
+    }
+
+    pub async fn close(&self, pane_id: &str) -> Result<PaneCloseResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:pane:close",
+                "pane.close",
+                serde_json::json!({ "pane_id": pane_id }),
+            )
+            .await
+    }
+
+    pub async fn open_plugin_pane(
+        &self,
+        options: PluginPaneOpenOptions,
+    ) -> Result<PluginPaneOpenResponse, RuntimeHandleError> {
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "plugin_id".to_owned(),
+            serde_json::Value::String(options.plugin_id),
+        );
+        params.insert(
+            "entrypoint".to_owned(),
+            serde_json::Value::String(options.entrypoint),
+        );
+        if let Some(placement) = options.placement {
+            params.insert(
+                "placement".to_owned(),
+                serde_json::Value::String(placement.as_str().to_owned()),
+            );
+        }
+        insert_opt(&mut params, "workspace_id", options.workspace_id);
+        insert_opt(&mut params, "target_pane_id", options.target_pane_id);
+        if let Some(direction) = options.direction {
+            params.insert(
+                "direction".to_owned(),
+                serde_json::Value::String(direction.as_str().to_owned()),
+            );
+        }
+        insert_opt_path(&mut params, "cwd", options.cwd);
+        params.insert("focus".to_owned(), serde_json::Value::Bool(options.focus));
+        if !options.env.is_empty() {
+            params.insert("env".to_owned(), env_object(options.env));
+        }
+        self.handle
+            .request_json_result(
+                "herdr-plugin:plugin:pane:open",
+                "plugin.pane.open",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn focus_plugin_pane(
+        &self,
+        pane_id: &str,
+    ) -> Result<PluginPaneFocusResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:plugin:pane:focus",
+                "plugin.pane.focus",
+                serde_json::json!({ "pane_id": pane_id }),
+            )
+            .await
+    }
+
+    pub async fn close_plugin_pane(
+        &self,
+        pane_id: &str,
+    ) -> Result<PluginPaneCloseResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:plugin:pane:close",
+                "plugin.pane.close",
+                serde_json::json!({ "pane_id": pane_id }),
+            )
+            .await
+    }
+}
+
+impl RuntimeHandle {
+    pub fn pane(&self) -> SocketPaneClient<'_> {
+        SocketPaneClient::new(self)
+    }
+}
+
 pub(crate) fn push_selector(args: &mut Vec<String>, pane: PaneSelector) {
     match pane {
         PaneSelector::Pane(pane_id) => {
@@ -462,5 +994,82 @@ pub(crate) fn push_focus(args: &mut Vec<String>, focus: Option<bool>) {
         Some(true) => args.push("--focus".to_owned()),
         Some(false) => args.push("--no-focus".to_owned()),
         None => {}
+    }
+}
+
+fn pane_id_params(pane: PaneSelector) -> serde_json::Value {
+    serde_json::Value::Object(pane_id_map(pane))
+}
+
+fn pane_id_map(pane: PaneSelector) -> serde_json::Map<String, serde_json::Value> {
+    let mut params = serde_json::Map::new();
+    if let PaneSelector::Pane(pane_id) = pane {
+        params.insert("pane_id".to_owned(), serde_json::Value::String(pane_id));
+    }
+    params
+}
+
+fn socket_move_destination(destination: PaneMoveDestination) -> serde_json::Value {
+    match destination {
+        PaneMoveDestination::ExistingTab {
+            tab_id,
+            split,
+            target_pane_id,
+            ratio,
+        } => {
+            let mut value = serde_json::Map::new();
+            value.insert(
+                "type".to_owned(),
+                serde_json::Value::String("tab".to_owned()),
+            );
+            value.insert("tab_id".to_owned(), serde_json::Value::String(tab_id));
+            value.insert(
+                "split".to_owned(),
+                serde_json::Value::String(split.as_str().to_owned()),
+            );
+            if let Some(target_pane_id) = target_pane_id {
+                value.insert(
+                    "target_pane_id".to_owned(),
+                    serde_json::Value::String(target_pane_id),
+                );
+            }
+            if let Some(ratio) = ratio {
+                value.insert("ratio".to_owned(), number(ratio));
+            }
+            serde_json::Value::Object(value)
+        }
+        PaneMoveDestination::NewTab {
+            workspace_id,
+            label,
+        } => {
+            let mut value = serde_json::Map::new();
+            value.insert(
+                "type".to_owned(),
+                serde_json::Value::String("new_tab".to_owned()),
+            );
+            insert_opt(&mut value, "workspace_id", workspace_id);
+            insert_opt(&mut value, "label", label);
+            serde_json::Value::Object(value)
+        }
+        PaneMoveDestination::NewWorkspace { label, tab_label } => {
+            let mut value = serde_json::Map::new();
+            value.insert(
+                "type".to_owned(),
+                serde_json::Value::String("new_workspace".to_owned()),
+            );
+            insert_opt(&mut value, "label", label);
+            insert_opt(&mut value, "tab_label", tab_label);
+            serde_json::Value::Object(value)
+        }
+    }
+}
+
+impl PaneZoomMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Toggle => "toggle",
+            Self::On => "on",
+            Self::Off => "off",
+        }
     }
 }

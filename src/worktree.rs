@@ -4,6 +4,8 @@ use crate::{
     client::HerdrClient,
     error::HerdrError,
     models::{WorktreeCreateResponse, WorktreeList, WorktreeOpenResponse, WorktreeRemoveResponse},
+    socket::{insert_opt, insert_opt_bool, insert_opt_path},
+    RuntimeHandle, RuntimeHandleError,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -141,6 +143,113 @@ impl<'a> WorktreeClient<'a> {
 
         self.client.run_json_result(args).await
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SocketWorktreeClient<'a> {
+    handle: &'a RuntimeHandle,
+}
+
+impl<'a> SocketWorktreeClient<'a> {
+    pub(crate) fn new(handle: &'a RuntimeHandle) -> Self {
+        Self { handle }
+    }
+
+    pub async fn list(
+        &self,
+        options: WorktreeListOptions,
+    ) -> Result<WorktreeList, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:worktree:list",
+                "worktree.list",
+                worktree_source_params(options.source),
+            )
+            .await
+    }
+
+    pub async fn create(
+        &self,
+        options: WorktreeCreateOptions,
+    ) -> Result<WorktreeCreateResponse, RuntimeHandleError> {
+        let mut params = source_map(options.source);
+        insert_opt(&mut params, "branch", options.branch);
+        insert_opt(&mut params, "base", options.base);
+        insert_opt_path(&mut params, "path", options.path);
+        insert_opt(&mut params, "label", options.label);
+        insert_opt_bool(&mut params, "focus", options.focus);
+        self.handle
+            .request_json_result(
+                "herdr-plugin:worktree:create",
+                "worktree.create",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn open(
+        &self,
+        options: WorktreeOpenOptions,
+    ) -> Result<WorktreeOpenResponse, RuntimeHandleError> {
+        let mut params = source_map(options.source);
+        match options.target {
+            WorktreeOpenTarget::Path(path) => insert_opt_path(&mut params, "path", Some(path)),
+            WorktreeOpenTarget::Branch(branch) => insert_opt(&mut params, "branch", Some(branch)),
+        }
+        insert_opt(&mut params, "label", options.label);
+        insert_opt_bool(&mut params, "focus", options.focus);
+        self.handle
+            .request_json_result(
+                "herdr-plugin:worktree:open",
+                "worktree.open",
+                serde_json::Value::Object(params),
+            )
+            .await
+    }
+
+    pub async fn remove(
+        &self,
+        workspace_id: &str,
+        force: bool,
+    ) -> Result<WorktreeRemoveResponse, RuntimeHandleError> {
+        self.handle
+            .request_json_result(
+                "herdr-plugin:worktree:remove",
+                "worktree.remove",
+                serde_json::json!({ "workspace_id": workspace_id, "force": force }),
+            )
+            .await
+    }
+}
+
+impl RuntimeHandle {
+    pub fn worktree(&self) -> SocketWorktreeClient<'_> {
+        SocketWorktreeClient::new(self)
+    }
+}
+
+fn worktree_source_params(source: Option<WorktreeSource>) -> serde_json::Value {
+    serde_json::Value::Object(source_map(source))
+}
+
+fn source_map(source: Option<WorktreeSource>) -> serde_json::Map<String, serde_json::Value> {
+    let mut params = serde_json::Map::new();
+    match source {
+        Some(WorktreeSource::Workspace(workspace_id)) => {
+            params.insert(
+                "workspace_id".to_owned(),
+                serde_json::Value::String(workspace_id),
+            );
+        }
+        Some(WorktreeSource::Cwd(cwd)) => {
+            params.insert(
+                "cwd".to_owned(),
+                serde_json::Value::String(cwd.display().to_string()),
+            );
+        }
+        None => {}
+    }
+    params
 }
 
 fn push_source(args: &mut Vec<String>, source: Option<WorktreeSource>) {

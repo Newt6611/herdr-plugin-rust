@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use crate::{env::HerdrEnv, events::EventKind, logger::Logger, HerdrClient};
+use crate::{env::HerdrEnv, events::EventKind, logger::Logger, HerdrClient, RuntimeHandle};
 
 /// Shared context passed to every plugin callback and event handler.
 pub struct Context<State = (), Config = ()> {
@@ -15,6 +15,7 @@ struct RuntimeServices<State, Config> {
     env: Arc<HerdrEnv>,
     state: Arc<Mutex<State>>,
     config: Arc<Config>,
+    socket: Option<RuntimeHandle>,
 }
 
 impl Context<()> {
@@ -41,12 +42,29 @@ impl<State, Config> Context<State, Config> {
                 env: Arc::new(env),
                 state,
                 config,
+                socket: None,
+            }),
+        }
+    }
+
+    pub(crate) fn with_socket(self, socket: RuntimeHandle) -> Self {
+        Self {
+            services: Arc::new(RuntimeServices {
+                client: self.services.client.clone(),
+                env: self.services.env.clone(),
+                state: self.services.state.clone(),
+                config: self.services.config.clone(),
+                socket: Some(socket),
             }),
         }
     }
 
     pub fn client(&self) -> &HerdrClient {
         &self.services.client
+    }
+
+    pub fn socket(&self) -> Option<RuntimeHandle> {
+        self.services.socket.clone()
     }
 
     pub fn env(&self) -> &HerdrEnv {

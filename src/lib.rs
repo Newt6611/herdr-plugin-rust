@@ -13,6 +13,7 @@ mod pane;
 mod plugin;
 mod runtime;
 mod session;
+mod socket;
 mod tab;
 mod workspace;
 mod worktree;
@@ -29,7 +30,7 @@ use std::{
 
 pub use agent::{
     AgentClient, AgentExplainOptions, AgentReadOptions, AgentReadSource, AgentStartOptions,
-    AgentWaitStatus, ReadFormat,
+    AgentWaitStatus, ReadFormat, SocketAgentClient,
 };
 pub use client::{CommandLine, HerdrClient};
 pub use context::Context;
@@ -55,20 +56,29 @@ pub use models::{
 pub use pane::{
     Direction, PaneClient, PaneListOptions, PaneMoveDestination, PaneMoveOptions, PaneSelector,
     PaneSplitOptions, PaneZoomMode, PluginPaneDirection, PluginPaneOpenOptions,
-    PluginPanePlacement,
+    PluginPanePlacement, SocketPaneClient,
 };
-pub use plugin::{PluginClient, PluginInstallOptions, PluginListOptions};
+pub use plugin::{
+    PluginActionInvokeOptions, PluginActionListOptions, PluginClient, PluginInstallOptions,
+    PluginLinkOptions, PluginListOptions, PluginLogListOptions, SocketPluginClient,
+};
 pub use runtime::{
     OneShotRuntime, Runtime, RuntimeApp, RuntimeFuture, RuntimeHandle, RuntimeHandleError,
     SocketRuntime,
 };
 use serde::de::DeserializeOwned;
 pub use session::SessionClient;
-pub use tab::{TabClient, TabCreateOptions, TabListOptions};
+pub use socket::{
+    IntegrationTarget, LayoutApplyOptions, LayoutExportOptions, LayoutSetSplitRatioOptions,
+    NotificationShowOptions, NotificationSound, ServerLiveHandoffOptions, SocketClientControl,
+    SocketEventsClient, SocketIntegrationClient, SocketLayoutClient, SocketNotificationClient,
+    SocketServerClient, SocketSessionClient,
+};
+pub use tab::{SocketTabClient, TabClient, TabCreateOptions, TabListOptions};
 pub use workspace::{SocketWorkspaceClient, WorkspaceClient, WorkspaceCreateOptions};
 pub use worktree::{
-    WorktreeClient, WorktreeCreateOptions, WorktreeListOptions, WorktreeOpenOptions,
-    WorktreeOpenTarget, WorktreeSource,
+    SocketWorktreeClient, WorktreeClient, WorktreeCreateOptions, WorktreeListOptions,
+    WorktreeOpenOptions, WorktreeOpenTarget, WorktreeSource,
 };
 
 pub type SetupError = Box<dyn Error + Send + Sync + 'static>;

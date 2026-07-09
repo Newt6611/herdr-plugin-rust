@@ -1,6 +1,4 @@
-use herdr_plugin::{
-    App, Context, EventKind, PaneFocused, RuntimeHandleError, SocketRuntime, TabRenamed,
-};
+use herdr_plugin::{App, Context, EventKind, PaneFocused, SocketRuntime, TabRenamed};
 use serde::Deserialize;
 
 #[derive(Debug)]
@@ -60,20 +58,6 @@ async fn main() -> Result<(), herdr_plugin::RuntimeError> {
         .run();
 
     let app_task = tokio::spawn(app);
-
-    while let Err(RuntimeHandleError::SocketUnavailable) = handle.server().ping().await {
-        tokio::task::yield_now().await;
-    }
-
-    let _created = handle
-        .workspace()
-        .create(herdr_plugin::WorkspaceCreateOptions {
-            cwd: None,
-            label: Some("socket-runtime-handle-example".to_owned()),
-            env: Vec::new(),
-            focus: Some(false),
-        })
-        .await;
 
     handle.stop().await.expect("failed to stop socket runtime");
 

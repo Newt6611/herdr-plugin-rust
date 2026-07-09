@@ -13,7 +13,7 @@ cargo add tokio --features macros,rt-multi-thread
 
 ```toml
 [dependencies]
-herdr-plugin = "0.1.7"
+herdr-plugin = "0.1.8"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
